@@ -25,6 +25,15 @@ struct Attachment: Hashable {
     var isVideo: Bool { mime.hasPrefix("video/") }
 }
 
+/// A link's preview card, as Messages saved it when the link was sent.
+struct LinkPreview: Hashable {
+    let url: URL
+    let title: String?
+    let site: String?
+    /// The page's picture, which Messages keeps as one of the message's attachments.
+    var image: URL?
+}
+
 struct Message: Identifiable {
     let id: Int64
     let guid: String
@@ -38,6 +47,7 @@ struct Message: Identifiable {
     var mine: String?
     /// The guid of the message this replies to, in a thread.
     var replyTo: String?
+    var link: LinkPreview?
 }
 
 struct DBError: Error { let message: String }
@@ -107,10 +117,11 @@ final class MessagesDB {
     func messages(chat: Int64, limit: Int64 = 80) throws -> [Message] {
         var rows: [Message] = []
         var tapbacks: [(target: String, sender: String, type: Int64, emoji: String?)] = []
+        var linkImages: [Int64: Int] = [:]  // message ROWID to which of its preview files is the picture
         try query("""
             SELECT m.ROWID, m.guid, m.date, m.is_from_me, h.id, m.text, m.attributedBody,
                    m.associated_message_type, m.associated_message_guid, m.associated_message_emoji,
-                   m.thread_originator_guid
+                   m.thread_originator_guid, m.balloon_bundle_id, m.payload_data
             FROM chat_message_join cmj
             JOIN message m ON m.ROWID = cmj.message_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -121,8 +132,13 @@ final class MessagesDB {
             if r.int(7) == 0 {
                 let raw = r.text(5).flatMap { $0.isEmpty ? nil : $0 } ?? r.data(6).flatMap(decodeAttributedBody) ?? ""
                 let text = raw.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                rows.append(Message(id: r.int(0), guid: r.text(1) ?? "", date: appleDate(r.int(2)),
-                                    fromMe: fromMe, sender: fromMe ? nil : r.text(4), text: text, replyTo: r.text(10)))
+                var message = Message(id: r.int(0), guid: r.text(1) ?? "", date: appleDate(r.int(2)),
+                                      fromMe: fromMe, sender: fromMe ? nil : r.text(4), text: text, replyTo: r.text(10))
+                if r.text(11) == "com.apple.messages.URLBalloonProvider", let preview = r.data(12).flatMap(linkPreview) {
+                    message.link = preview.link
+                    linkImages[message.id] = preview.image
+                }
+                rows.append(message)
             } else if let target = r.text(8) {
                 tapbacks.append((target, fromMe ? "me" : r.text(4) ?? "", r.int(7), r.text(9)))
             }
@@ -130,6 +146,7 @@ final class MessagesDB {
         rows.reverse()
 
         let index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        var previewFiles: [Int: [URL]] = [:]  // row index to its link preview's files, in order
         try query("""
             SELECT maj.message_id, a.filename, a.mime_type
             FROM message_attachment_join maj JOIN attachment a ON a.ROWID = maj.attachment_id
@@ -137,11 +154,17 @@ final class MessagesDB {
                                      WHERE chat_id = ? ORDER BY message_date DESC LIMIT ?)
             ORDER BY a.ROWID
             """, chat, limit) { r in
-            guard let i = index[r.int(0)], let name = r.text(1), !name.hasSuffix("pluginPayloadAttachment") else { return }
+            guard let i = index[r.int(0)], let name = r.text(1) else { return }
             let url = URL(filePath: (name as NSString).expandingTildeInPath)
+            if name.hasSuffix("pluginPayloadAttachment") { return previewFiles[i, default: []].append(url) }
             guard FileManager.default.fileExists(atPath: url.path) else { return }  // pruned or offloaded to iCloud
             let mime = r.text(2) ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? ""
             rows[i].attachments.append(Attachment(url: url, mime: mime))
+        }
+        for (i, files) in previewFiles {
+            guard let n = linkImages[rows[i].id], files.indices.contains(n),
+                  FileManager.default.fileExists(atPath: files[n].path) else { continue }
+            rows[i].link?.image = files[n]
         }
 
         // One tapback per person per message: a later one replaces it, a 3000-series row removes it.
@@ -190,6 +213,50 @@ private struct Row {
 }
 
 private let tapbackEmoji: [Int64: String] = [2000: "❤️", 2001: "👍", 2002: "👎", 2003: "😂", 2004: "‼️", 2005: "❓"]
+
+/// Reads the preview Messages saved for a link: an NSKeyedArchiver plist of Messages' own classes, walked as plain
+/// dictionaries (as Beeper's platform-imessage does). The picture is an index into the message's preview files.
+func linkPreview(_ data: Data) -> (link: LinkPreview, image: Int?)? {
+    guard let archive = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let objects = archive["$objects"] as? [Any],
+          let root = (archive["$top"] as? [String: Any])?["root"] else { return nil }
+    func resolve(_ value: Any, _ depth: Int) -> Any? {
+        guard depth < 32 else { return nil }  // archives can refer back to themselves
+        if let uid = archiveUID(value) { return objects.indices.contains(uid) ? resolve(objects[uid], depth + 1) : nil }
+        switch value {
+        case let string as String:
+            return string == "$null" ? nil : string
+        case let dict as [String: Any]:
+            if let keys = dict["NS.keys"] as? [Any], let values = dict["NS.objects"] as? [Any] {
+                var out: [String: Any] = [:]
+                for (k, v) in zip(keys, values) { if let k = resolve(k, depth + 1) as? String { out[k] = resolve(v, depth + 1) } }
+                return out
+            }
+            if let values = dict["NS.objects"] as? [Any] { return values.compactMap { resolve($0, depth + 1) } }
+            var out: [String: Any] = [:]
+            for (k, v) in dict where k != "$class" { out[k] = resolve(v, depth + 1) }
+            return out
+        default:
+            return value
+        }
+    }
+    guard let meta = (resolve(root, 0) as? [String: Any])?["richLinkMetadata"] as? [String: Any] else { return nil }
+    func string(_ v: Any?) -> String? { (v as? String) ?? ((v as? [String: Any])?["NS.string"] as? String) }
+    func url(_ v: Any?) -> URL? { string((v as? [String: Any])?["NS.relative"] ?? v).flatMap(URL.init(string:)) }
+    guard let link = url(meta["originalURL"]) ?? url(meta["URL"]) else { return nil }
+    let title = string(meta["title"]).flatMap { $0.isEmpty ? nil : $0 }
+    let image = (meta["image"] as? [String: Any])?["richLinkImageAttachmentSubstituteIndex"] as? Int
+    return (LinkPreview(url: link, title: title, site: string(meta["siteName"]), image: nil), image)
+}
+
+/// A keyed archive's reference to another of its objects. Binary plists hold these as an opaque CF type.
+private func archiveUID(_ value: Any) -> Int? {
+    if let dict = value as? [String: Any] { return dict.count == 1 ? dict["CF$UID"] as? Int : nil }
+    if value is String || value is Data || value is NSNumber || value is [Any] { return nil }
+    let text = String(describing: value)  // "<CFKeyedArchiverUID 0x…>{value = 7}"
+    guard text.contains("CFKeyedArchiverUID"), let r = text.range(of: #"value = \d+"#, options: .regularExpression) else { return nil }
+    return Int(text[r].dropFirst("value = ".count))
+}
 
 /// chat.db stores dates as nanoseconds since 2001-01-01, which is Foundation's reference date.
 private func appleDate(_ ns: Int64) -> Date { Date(timeIntervalSinceReferenceDate: Double(ns) / 1_000_000_000) }

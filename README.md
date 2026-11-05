@@ -35,6 +35,8 @@ Drag Perch to Applications, open it, then grant:
 - The waveform button records a voice note, with a live waveform: Send stops and sends it, × throws it away.
 - The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.
+- Links show as cards with the page's picture, title and site, read from the preview Messages saved, so Perch fetches nothing itself. Click one to open it.
+- Reactions sit in circles on the bubble's top corner, yours in blue.
 - Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Double-click a message to react (❤️ 👍 👎 😂 ‼️ ❓; your current one takes it off). Right-click for the same reactions, Reply, Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
 - Swipe sideways on a message with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
@@ -45,7 +47,6 @@ Drag Perch to Applications, open it, then grant:
 ## Not supported
 
 - Native voice-message bubbles. Voice notes arrive as audio files, which play inline in Messages.
-- Link preview cards. Links are clickable text.
 - Deleting or unsending.
 
 ## Develop

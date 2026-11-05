@@ -308,25 +308,38 @@ struct MessageRow: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .padding(.horizontal, 4)
                 }
-                ForEach(message.attachments.filter(\.isAudio), id: \.self) { AudioChip(url: $0.url) }
-                let media = message.attachments.filter { !$0.isAudio }
-                if !media.isEmpty {
-                    MediaGrid(items: media).overlay(alignment: .topTrailing) {
-                        if isPending {
-                            Image(systemName: "icloud.and.arrow.up").font(.caption)
-                                .padding(6).background(.ultraThinMaterial, in: .circle).padding(6)
+                VStack(alignment: message.fromMe ? .trailing : .leading, spacing: 4) {
+                    ForEach(message.attachments.filter(\.isAudio), id: \.self) { AudioChip(url: $0.url) }
+                    let media = message.attachments.filter { !$0.isAudio }
+                    if !media.isEmpty {
+                        MediaGrid(items: media).overlay(alignment: .topTrailing) {
+                            if isPending {
+                                Image(systemName: "icloud.and.arrow.up").font(.caption)
+                                    .padding(6).background(.ultraThinMaterial, in: .circle).padding(6)
+                            }
                         }
                     }
+                    // A bare link shows as its card alone, as in Messages.
+                    if !message.text.isEmpty, message.link == nil || message.text.contains(where: \.isWhitespace) {
+                        Text(linkified(message.text))
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
+                            .simultaneousGesture(TapGesture(count: 2).onEnded { picking = !isPending })  // links still take one click
+                            .popover(isPresented: $picking, arrowEdge: .top) { tapbackBar }
+                    }
+                    if let link = message.link { LinkCard(link: link) }
                 }
-                if !message.text.isEmpty {
-                    Text(linkified(message.text))
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
-                        .simultaneousGesture(TapGesture(count: 2).onEnded { picking = !isPending })  // links still take one click
-                        .popover(isPresented: $picking, arrowEdge: .top) { tapbackBar }
-                }
-                if !reactions.isEmpty {
-                    Text(reactions.joined()).font(.caption)
+                .overlay(alignment: message.fromMe ? .topLeading : .topTrailing) {
+                    // Tapbacks sit on the bubble's top corner, as in Messages: mine in blue.
+                    HStack(spacing: -6) {
+                        ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
+                            Text(badge.emoji).font(.system(size: 11))
+                                .frame(width: 22, height: 22)
+                                .background(badge.mine ? Color.blue : Color(white: 0.4), in: .circle)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                    .offset(x: message.fromMe ? -10 : 10, y: -12)
                 }
                 if let when = store.reminders[message.guid], when > .now {
                     Label("Reminder \(inline.string(from: when))", systemImage: "bell.fill")
@@ -347,6 +360,7 @@ struct MessageRow: View {
             }
             if message.fromMe { avatar } else { Spacer(minLength: 40) }
         }
+        .padding(.top, badges.isEmpty ? 0 : 10)  // room for the badges above the bubble
     }
 
     /// The six tapbacks, from a double-click. Mine is marked; picking it again takes it off.
@@ -376,13 +390,12 @@ struct MessageRow: View {
         .frame(width: 22, height: 22)
     }
 
-    /// chat.db's tapbacks, with mine swapped for the one on its way, if any.
-    private var reactions: [String] {
-        var shown = message.reactions
-        guard let override = store.tapbacks[message.guid] else { return shown }
-        if let old = message.mine, let i = shown.firstIndex(of: old) { shown.remove(at: i) }
-        if let new = override { shown.append(new) }
-        return shown
+    /// chat.db's tapbacks, theirs then mine, with mine swapped for the one on its way, if any.
+    private var badges: [(emoji: String, mine: Bool)] {
+        var theirs = message.reactions
+        if let old = message.mine, let i = theirs.firstIndex(of: old) { theirs.remove(at: i) }
+        let mine = store.tapbacks[message.guid] ?? message.mine
+        return theirs.map { ($0, false) } + (mine.map { [($0, true)] } ?? [])
     }
 
     @ViewBuilder private var menu: some View {
@@ -726,6 +739,42 @@ struct Composer: View {
                 .background(.quaternary, in: .capsule)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A link's card: the page's picture, title and site, from the preview Messages saved. Click opens the link.
+struct LinkCard: View {
+    let link: LinkPreview
+    @State private var image: NSImage?
+
+    var body: some View {
+        Button { NSWorkspace.shared.open(link.url) } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                if let image {
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: 240, height: min(160, 240 * image.size.height / max(image.size.width, 1)))
+                        .clipped()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(link.title ?? link.url.host() ?? link.url.absoluteString)
+                        .font(.callout.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                    Text(link.site ?? link.url.host() ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 240)
+            .background(.quaternary)
+            .clipShape(.rect(cornerRadius: 16, style: .continuous))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(link.url.absoluteString)
+        .task(id: link.image) {
+            guard let file = link.image else { return }
+            let data = await Task.detached { try? Data(contentsOf: file) }.value  // no extension, so read it as data
+            image = data.flatMap(NSImage.init(data:))
+        }
     }
 }
 

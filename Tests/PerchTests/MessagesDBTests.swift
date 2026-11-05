@@ -12,6 +12,13 @@ import Testing
     try Data([0xFF]).write(to: photo)
     let archived = NSArchiver.archivedData(withRootObject: NSAttributedString(string: "from attributedBody"))
     let blob = archived.map { String(format: "%02x", $0) }.joined()
+    // A link preview as Messages saves it: the metadata archived, its picture swapped for the index of a file.
+    let preview = dir.appending(path: "AB12.pluginPayloadAttachment")
+    try Data([0xFF]).write(to: preview)
+    let payload = try NSKeyedArchiver.archivedData(withRootObject: ["richLinkMetadata": [
+        "title": "Cobalt", "siteName": "American Express", "URL": NSURL(string: "https://americanexpress.com/x")!,
+        "image": ["richLinkImageAttachmentSubstituteIndex": 0],
+    ]] as NSDictionary, requiringSecureCoding: false).map { String(format: "%02x", $0) }.joined()
 
     let path = dir.appending(path: "chat.db").path
     var db: OpaquePointer?
@@ -23,7 +30,7 @@ import Testing
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
           date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
           associated_message_guid TEXT, associated_message_emoji TEXT, is_read INTEGER DEFAULT 0,
-          thread_originator_guid TEXT);
+          thread_originator_guid TEXT, balloon_bundle_id TEXT, payload_data BLOB);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
         CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT);
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
@@ -43,9 +50,12 @@ import Testing
           (8, 'D', NULL, NULL, 1, 8000, 0, 0, 0, NULL),
           (9, 'Z', 'old group', NULL, 1, 500, 0, 0, 0, NULL);
         INSERT INTO chat_message_join SELECT 1, ROWID, date FROM message WHERE ROWID < 9;
-        INSERT INTO chat_message_join VALUES (2, 9, 500);
-        INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg'), (2, '/nope/gone.jpg', 'image/jpeg');
-        INSERT INTO message_attachment_join VALUES (3, 1), (8, 2);
+        INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me, is_read, balloon_bundle_id, payload_data)
+          VALUES (10, 'L', 'https://americanexpress.com/x', 1, 400, 0, 1, 'com.apple.messages.URLBalloonProvider', X'\(payload)');
+        INSERT INTO chat_message_join VALUES (2, 9, 500), (2, 10, 400);
+        INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg'), (2, '/nope/gone.jpg', 'image/jpeg'),
+          (3, '\(preview.path)', NULL);
+        INSERT INTO message_attachment_join VALUES (3, 1), (8, 2), (10, 3);
         UPDATE message SET thread_originator_guid = 'A' WHERE ROWID = 3;
         UPDATE message SET is_read = 1 WHERE ROWID IN (1, 3);
         """
@@ -65,6 +75,11 @@ import Testing
     #expect(rows[1].fromMe && rows[0].sender == "+15551234567")
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
     #expect(rows.map(\.replyTo) == [nil, nil, "A"])
+
+    let link = try #require(try messages.messages(chat: 2).first?.link)
+    #expect(link.title == "Cobalt" && link.site == "American Express")
+    #expect(link.url.absoluteString == "https://americanexpress.com/x")
+    #expect(link.image?.path == preview.path)  // the preview file isn't shown as an attachment of its own
 
     #expect(ContactBook.key("+1 (555) 123-4567") == ContactBook.key("5551234567"))
 }
