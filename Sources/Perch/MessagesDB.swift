@@ -9,6 +9,9 @@ struct Chat: Identifiable, Hashable {
     let identifier: String
     let groupName: String?
     let handles: [String]
+    var lastActive = Date.distantPast
+    /// ROWID of their newest unread message, unless I've written since, which means I read it.
+    var unread: Int64?
 }
 
 struct Attachment: Hashable {
@@ -29,6 +32,8 @@ struct Message: Identifiable {
     var reactions: [String] = []
     /// My own tapback on it, if any.
     var mine: String?
+    /// The guid of the message this replies to, in a thread.
+    var replyTo: String?
 }
 
 struct DBError: Error { let message: String }
@@ -60,16 +65,28 @@ final class MessagesDB {
     func chats(limit: Int64 = 100) throws -> [Chat] {
         var out: [Chat] = []
         try query("""
-            SELECT c.ROWID, c.guid, c.chat_identifier, c.display_name,
+            WITH top AS (
+              SELECT c.ROWID AS id, c.guid, c.chat_identifier, c.display_name, MAX(cmj.message_date) AS last
+              FROM chat c JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
+              GROUP BY c.ROWID ORDER BY last DESC LIMIT ?)
+            SELECT id, guid, chat_identifier, display_name,
               (SELECT group_concat(h.id, ',') FROM chat_handle_join j
-                 JOIN handle h ON h.ROWID = j.handle_id WHERE j.chat_id = c.ROWID)
-            FROM chat c JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
-            GROUP BY c.ROWID ORDER BY MAX(cmj.message_date) DESC LIMIT ?
+                 JOIN handle h ON h.ROWID = j.handle_id WHERE j.chat_id = top.id),
+              last,
+              (SELECT MAX(m.ROWID) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
+                 WHERE j.chat_id = top.id AND m.is_from_me = 0 AND m.is_read = 0
+                   AND m.item_type = 0 AND m.associated_message_type = 0),
+              (SELECT MAX(m.ROWID) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
+                 WHERE j.chat_id = top.id AND m.is_from_me = 1)
+            FROM top ORDER BY last DESC
             """, limit) { r in
+            let unread = r.int(6), mine = r.int(7)  // 0 when there is none
             out.append(Chat(
                 id: r.int(0), guid: r.text(1) ?? "", identifier: r.text(2) ?? "",
                 groupName: r.text(3).flatMap { $0.isEmpty ? nil : $0 },
-                handles: r.text(4)?.split(separator: ",").map(String.init) ?? []))
+                handles: r.text(4)?.split(separator: ",").map(String.init) ?? [],
+                lastActive: appleDate(r.int(5)),
+                unread: unread > mine ? unread : nil))
         }
         return out
     }
@@ -80,7 +97,8 @@ final class MessagesDB {
         var tapbacks: [(target: String, sender: String, type: Int64, emoji: String?)] = []
         try query("""
             SELECT m.ROWID, m.guid, m.date, m.is_from_me, h.id, m.text, m.attributedBody,
-                   m.associated_message_type, m.associated_message_guid, m.associated_message_emoji
+                   m.associated_message_type, m.associated_message_guid, m.associated_message_emoji,
+                   m.thread_originator_guid
             FROM chat_message_join cmj
             JOIN message m ON m.ROWID = cmj.message_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -92,7 +110,7 @@ final class MessagesDB {
                 let raw = r.text(5).flatMap { $0.isEmpty ? nil : $0 } ?? r.data(6).flatMap(decodeAttributedBody) ?? ""
                 let text = raw.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
                 rows.append(Message(id: r.int(0), guid: r.text(1) ?? "", date: appleDate(r.int(2)),
-                                    fromMe: fromMe, sender: fromMe ? nil : r.text(4), text: text))
+                                    fromMe: fromMe, sender: fromMe ? nil : r.text(4), text: text, replyTo: r.text(10)))
             } else if let target = r.text(8) {
                 tapbacks.append((target, fromMe ? "me" : r.text(4) ?? "", r.int(7), r.text(9)))
             }

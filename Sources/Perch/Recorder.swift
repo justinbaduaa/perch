@@ -16,12 +16,15 @@ import CoreGraphics
     private(set) var ready: URL?
     /// Where the running screen capture is stopped.
     private(set) var stopHint = ""
+    /// A voice note's loudness so far, 0...1, about 16 a second, the latest 120.
+    private(set) var levels: [CGFloat] = []
     /// Called with the chat id when a screen capture ends, stopped or cancelled, so the panel can come back.
     @ObservationIgnored var onScreenEnded: (Int64) -> Void = { _ in }
     @ObservationIgnored private var audio: AVAudioRecorder?
     @ObservationIgnored private var screen: Process?
     @ObservationIgnored private var file: URL?
     @ObservationIgnored private var watch: Task<Void, Never>?
+    @ObservationIgnored private var meter: Task<Void, Never>?
 
     func start(_ kind: Kind, for chat: Chat) async throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -35,9 +38,18 @@ import CoreGraphics
             let recorder = try AVAudioRecorder(url: url, settings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
             ])
+            recorder.isMeteringEnabled = true
             guard recorder.record() else { throw Failure(errorDescription: "Couldn't start recording.") }
             audio = recorder
             file = url
+            meter = Task {
+                while !Task.isCancelled, let audio {
+                    audio.updateMeters()
+                    let db = CGFloat(audio.averagePower(forChannel: 0))  // -160 is silence, 0 is full scale
+                    levels = Array((levels + [min(1, max(0, (db + 50) / 40))]).suffix(120))
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
+            }
         case .screen where NSWorkspace.shared.urlForApplication(withBundleIdentifier: "pl.maketheweb.cleanshotx") != nil:
             // CleanShot's recorder picks the area, window or display, and has pause, restart and stop.
             NSWorkspace.shared.open(URL(string: "cleanshot://record-screen")!)
@@ -139,6 +151,9 @@ import CoreGraphics
     }
 
     private func reset() {
+        meter?.cancel()
+        meter = nil
+        levels = []
         audio = nil
         screen = nil
         file = nil

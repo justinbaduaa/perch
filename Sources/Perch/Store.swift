@@ -9,11 +9,12 @@ struct Pending: Identifiable {
     let text: String
     let file: URL?
     var date = Date.now
+    var replyTo: String?
 
     var message: Message {
         let mime = file.flatMap { UTType(filenameExtension: $0.pathExtension)?.preferredMIMEType } ?? ""
         return Message(id: id, guid: "", date: date, fromMe: true, sender: nil, text: text,
-                       attachments: file.map { [Attachment(url: $0, mime: mime)] } ?? [])
+                       attachments: file.map { [Attachment(url: $0, mime: mime)] } ?? [], replyTo: replyTo)
     }
 
     /// True once chat.db has a row from me that matches: same text, or an attachment with the same file name.
@@ -42,6 +43,8 @@ struct Pending: Identifiable {
     let recorder = Recorder()
     /// Message guid to reminder time. The system keeps the reminders, as pending notifications keyed by guid.
     private(set) var reminders: [String: Date] = [:]
+    /// Chats held at the front of the menu bar, by guid, in the order they were pinned.
+    private(set) var pins = UserDefaults.standard.stringArray(forKey: "pins") ?? []
     var panelChat: Chat?
     var panelShown = false
     /// The menu bar avatar under the pointer.
@@ -55,6 +58,8 @@ struct Pending: Identifiable {
     @ObservationIgnored private var db: MessagesDB?
     @ObservationIgnored private var lastRowID: Int64 = -1
     @ObservationIgnored private var nextPendingID: Int64 = -1
+    /// Chat guid to the newest unread row opened in Perch, so the bar rings only what came after.
+    @ObservationIgnored private var seen = UserDefaults.standard.dictionary(forKey: "seen") as? [String: Int] ?? [:]
 
     func start() {
         recorder.onScreenEnded = { [unowned self] id in
@@ -80,11 +85,30 @@ struct Pending: Identifiable {
         }
     }
 
-    /// The people you talked to last, whoever sent the last message. A chat you're recording for stays first,
-    /// so the recording is one click away after the panel closes.
+    /// Pinned chats, then the people you talked to last, whoever sent the last message. A chat you're recording
+    /// for goes first, so the recording is one click away after the panel closes.
     var barChats: [Chat] {
-        let recording = chats.first { $0.id == recorder.chatID }
-        return Array(([recording].compactMap(\.self) + chats.filter { $0.id != recording?.id }).prefix(5))
+        let recording = chats.filter { $0.id == recorder.chatID }
+        let pinned = pins.compactMap { guid in chats.first { $0.guid == guid } }
+        var ids = Set<Int64>()
+        return Array((recording + pinned + chats).filter { ids.insert($0.id).inserted }.prefix(5))
+    }
+
+    func togglePin(_ chat: Chat) {
+        if pins.contains(chat.guid) { pins.removeAll { $0 == chat.guid } } else { pins.append(chat.guid) }
+        UserDefaults.standard.set(pins, forKey: "pins")
+        onChange()
+    }
+
+    /// Something they sent that I haven't opened in Perch or answered. Messages itself may still count it unread.
+    func isUnread(_ chat: Chat) -> Bool { chat.unread.map { $0 > seen[chat.guid] ?? 0 } ?? false }
+
+    /// Opening a chat in Perch reads it, as far as the bar's rings go.
+    func markSeen(_ chat: Chat?) {
+        guard let chat = chats.first(where: { $0.id == chat?.id }), let row = chat.unread.map(Int.init),
+              seen[chat.guid] != row else { return }
+        seen[chat.guid] = row
+        UserDefaults.standard.set(seen, forKey: "seen")
     }
 
     func messages(for chat: Chat) -> [Message] { (try? db?.messages(chat: chat.id)) ?? [] }
@@ -99,14 +123,21 @@ struct Pending: Identifiable {
 
     func photo(_ chat: Chat) -> NSImage? { chat.handles.count == 1 ? contacts.photo(chat.handles[0]) : nil }
 
-    /// Shows the send in the thread at once, then hands it to Messages. Returns false if it failed.
+    /// Shows the send in the thread at once, then hands it to Messages, or to the hidden copy for a reply.
+    /// Returns false if it failed.
     @discardableResult
-    func send(_ text: String = "", file: URL? = nil, to chat: Chat) async -> Bool {
-        let p = Pending(id: nextPendingID, chatID: chat.id, text: text, file: file)
+    func send(_ text: String = "", file: URL? = nil, to chat: Chat, replyingTo original: Message? = nil) async -> Bool {
+        let p = Pending(id: nextPendingID, chatID: chat.id, text: text, file: file, replyTo: original?.guid)
         nextPendingID -= 1
         withAnimation(.smooth) { pending.append(p) }
         do {
-            if let file { try await MessagesApp.send(file: file, to: chat) } else { try await MessagesApp.send(text: text, to: chat) }
+            if let original {
+                try await HiddenMessages.reply(text: file == nil ? text : nil, file: file, to: original.guid, chat: chat.guid)
+            } else if let file {
+                try await MessagesApp.send(file: file, to: chat)
+            } else {
+                try await MessagesApp.send(text: text, to: chat)
+            }
             sendError = nil
             // The real row replaces it as soon as it lands (see `Pending.landed`); this only cleans up.
             Task {
@@ -129,14 +160,14 @@ struct Pending: Identifiable {
         withAnimation(.smooth) { drafts[chatID]?.removeAll { $0 == file } }
     }
 
-    /// Sends the staged files, then the text, as Messages does. A file that fails goes back in the box.
-    /// Returns false if the text failed, so the caller can put it back.
-    func sendDraft(text: String, to chat: Chat) async -> Bool {
+    /// Sends the staged files, then the text, as Messages does, all into `original`'s thread if given.
+    /// A file that fails goes back in the box. Returns false if the text failed, so the caller can put it back.
+    func sendDraft(text: String, to chat: Chat, replyingTo original: Message? = nil) async -> Bool {
         let files = drafts.removeValue(forKey: chat.id) ?? []
         for file in files {
-            if await !send(file: file, to: chat) { stage([file], for: chat.id) }
+            if await !send(file: file, to: chat, replyingTo: original) { stage([file], for: chat.id) }
         }
-        return text.isEmpty ? true : await send(text, to: chat)
+        return text.isEmpty ? true : await send(text, to: chat, replyingTo: original)
     }
 
     /// Picking the tapback you already gave takes it off, as in Messages; any other replaces it.
@@ -145,7 +176,7 @@ struct Pending: Identifiable {
         withAnimation(.smooth) { tapbacks[message.guid] = .some(on ? emoji : nil) }
         Task {
             do {
-                try await Tapbacks.set(emoji, on: on, message: message.guid, chat: chat.guid)
+                try await HiddenMessages.react(emoji, on: on, message: message.guid, chat: chat.guid)
                 sendError = nil
                 try? await Task.sleep(for: .seconds(6))  // chat.db has the row by now
             } catch {
@@ -177,6 +208,7 @@ struct Pending: Identifiable {
             guard max != lastRowID else { return }
             lastRowID = max
             chats = try db!.chats()
+            if panelShown { markSeen(panelChat) }  // arrived while open, so read
             revision += 1
         } catch {
             db = nil

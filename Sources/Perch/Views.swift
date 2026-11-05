@@ -61,6 +61,9 @@ struct PeopleView: View {
                                 Avatar(image: store.photo(chat), name: store.name(chat), size: 28)
                                 Text(store.name(chat)).lineLimit(1)
                                 Spacer(minLength: 0)
+                                if store.pins.contains(chat.guid) {
+                                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(hovered == chat.id ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
@@ -69,6 +72,10 @@ struct PeopleView: View {
                         }
                         .buttonStyle(.plain)
                         .onHover { hovered = $0 ? chat.id : nil }
+                        .contextMenu {
+                            let pinned = store.pins.contains(chat.guid)
+                            Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") { store.togglePin(chat) }
+                        }
                     }
                 }
                 .padding(.horizontal, 6).padding(.bottom, 8)
@@ -82,6 +89,7 @@ struct PeopleView: View {
     }
 
     private func open(_ chat: Chat) {
+        store.markSeen(chat)
         withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
         store.onChange()  // the strip rings the open chat
     }
@@ -107,6 +115,23 @@ struct ConversationView: View {
     let openInMessages: () -> Void
     @State private var messages: [Message] = []
     @State private var dropping = false
+    @State private var replying: Message?
+    @State private var swipe: Swipe?
+    @State private var rows = RowFrames()
+    @State private var monitor: Any?
+
+    /// A two-finger swipe on one message: finger travel so far, and whether it turned out sideways.
+    private struct Swipe {
+        let guid: String
+        var x: CGFloat = 0, y: CGFloat = 0
+        var sideways: Bool?
+        var momentum = false  // the swipe ended; its momentum events are swallowed too
+        /// Follows the fingers up to the reply arrow, then drags.
+        var shown: CGFloat { abs(x) <= replyReach ? x : (replyReach + (abs(x) - replyReach) * 0.25) * (x < 0 ? -1 : 1) }
+    }
+
+    /// Where each message row sits in the panel. A plain object, so scrolling doesn't re-render the thread.
+    private final class RowFrames { var byGuid: [String: CGRect] = [:] }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,11 +146,16 @@ struct ConversationView: View {
                         }
                         let next = i + 1 < messages.count ? messages[i + 1] : nil
                         MessageRow(store: store, chat: chat, message: m,
-                                   showAvatar: next == nil || next?.fromMe != m.fromMe || next?.sender != m.sender)
+                                   showAvatar: next == nil || next?.fromMe != m.fromMe || next?.sender != m.sender,
+                                   quoted: quoted(m), swipe: pull(m),
+                                   reply: { replying = m })
                             .id(m.id)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { rows.byGuid[m.guid] = $0 }
+                            .onDisappear { rows.byGuid[m.guid] = nil }
                     }
                     ForEach(store.pending.filter { $0.chatID == chat.id && !$0.landed(in: messages) }) { p in
-                        MessageRow(store: store, chat: chat, message: p.message, showAvatar: false, isPending: true)
+                        MessageRow(store: store, chat: chat, message: p.message, showAvatar: false, quoted: quoted(p.message),
+                                   isPending: true)
                             .transition(.scale(scale: 0.9, anchor: .bottomTrailing).combined(with: .opacity))
                     }
                 }
@@ -135,7 +165,7 @@ struct ConversationView: View {
             .defaultScrollAnchor(.bottom)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .scrollIndicators(.never)
-            Composer(store: store, chat: chat)
+            Composer(store: store, chat: chat, replying: $replying)
         }
         .overlay {
             if dropping {
@@ -150,6 +180,59 @@ struct ConversationView: View {
         .task(id: "\(chat.id)-\(store.revision)") {
             messages = store.messages(for: chat)
             Preview.shared.urls = messages.flatMap { $0.attachments.filter { !$0.isAudio }.map(\.url) }
+        }
+        .onAppear { monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { scrolled($0) ? nil : $0 } }
+        .onDisappear { monitor.map(NSEvent.removeMonitor) }
+    }
+
+    private func quoted(_ m: Message) -> Message? { m.replyTo.flatMap { guid in messages.first { $0.guid == guid } } }
+
+    /// Either way the fingers go, the bubble slides toward the middle of the panel, off its reply arrow.
+    private func pull(_ m: Message) -> CGFloat {
+        guard let swipe, swipe.guid == m.guid, swipe.sideways == true else { return 0 }
+        return m.fromMe ? -abs(swipe.shown) : abs(swipe.shown)
+    }
+
+    /// Two fingers sideways on a message pull it toward a reply arrow; letting go past the arrow replies, as in
+    /// Messages. Up and down still scroll. Returns true for the events of a reply swipe, so the thread stays put.
+    private func scrolled(_ event: NSEvent) -> Bool {
+        if event.phase.isEmpty && event.momentumPhase.isEmpty { return false }  // a mouse wheel
+        if event.phase == .began {
+            let at = Preview.shared.host.map { $0.convert(event.locationInWindow, from: nil) } ?? .zero
+            swipe = rows.byGuid.first { $0.value.contains(at) }.map { Swipe(guid: $0.key) }
+            return false
+        }
+        guard var s = swipe else { return false }
+        if !event.momentumPhase.isEmpty {
+            if event.momentumPhase == .ended { swipe = nil }
+            return s.momentum
+        }
+        // Natural scrolling reports finger travel as is; classic scrolling reports it reversed.
+        let dx = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
+        switch event.phase {
+        case .changed where s.sideways == nil:
+            s.x += dx
+            s.y += event.scrollingDeltaY
+            if abs(s.x) + abs(s.y) > 6 { s.sideways = abs(s.x) > abs(s.y) }
+            swipe = s.sideways == false ? nil : s
+            return s.sideways == true
+        case .changed where s.sideways == true:
+            let before = abs(s.x) >= replyReach
+            s.x += dx
+            if before != (abs(s.x) >= replyReach) { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            swipe = s
+            return true
+        case .ended, .cancelled:
+            guard s.sideways == true else { swipe = nil; return false }
+            if event.phase == .ended, abs(s.x) >= replyReach, let m = messages.first(where: { $0.guid == s.guid }) {
+                withAnimation(.smooth(duration: 0.2)) { replying = m }
+            }
+            withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
+                swipe = Swipe(guid: "", sideways: true, momentum: true)  // springs the row back, keeps eating momentum
+            }
+            return true
+        default:
+            return s.sideways == true
         }
     }
 
@@ -190,13 +273,24 @@ struct MessageRow: View {
     let chat: Chat
     let message: Message
     let showAvatar: Bool
+    /// The message this one replies to, when it's loaded.
+    var quoted: Message?
+    /// How far a two-finger swipe has pulled it toward replying.
+    var swipe: CGFloat = 0
+    var reply: () -> Void = {}
     /// Sent but not yet in chat.db: dimmed, with an upload mark on files, and no menu.
     var isPending = false
+    @State private var picking = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.fromMe { Spacer(minLength: 40) } else { avatar }
             VStack(alignment: message.fromMe ? .trailing : .leading, spacing: 4) {
+                if let quoted {
+                    Label(quoted.text.isEmpty ? "Attachment" : quoted.text, systemImage: "arrowshape.turn.up.left")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .padding(.horizontal, 4)
+                }
                 ForEach(message.attachments.filter(\.isAudio), id: \.self) { AudioChip(url: $0.url) }
                 let media = message.attachments.filter { !$0.isAudio }
                 if !media.isEmpty {
@@ -211,6 +305,8 @@ struct MessageRow: View {
                     Text(linkified(message.text))
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { picking = !isPending })  // links still take one click
+                        .popover(isPresented: $picking, arrowEdge: .top) { tapbackBar }
                 }
                 if !reactions.isEmpty {
                     Text(reactions.joined()).font(.caption)
@@ -223,8 +319,32 @@ struct MessageRow: View {
             }
             .opacity(isPending ? 0.55 : 1)
             .contextMenu { if !isPending { menu.labelStyle(.titleAndIcon) } }
+            .offset(x: swipe)
+            .background(alignment: swipe < 0 ? .trailing : .leading) {
+                // Laid out where the bubble rests, so it stays put while the bubble slides off it.
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .foregroundStyle(abs(swipe) >= replyReach ? .primary : .secondary)
+                    .frame(width: 28)
+                    .scaleEffect(min(1, abs(swipe) / replyReach))
+                    .opacity(min(1, abs(swipe) / replyReach))
+            }
             if message.fromMe { avatar } else { Spacer(minLength: 40) }
         }
+    }
+
+    /// The six tapbacks, from a double-click. Mine is marked; picking it again takes it off.
+    private var tapbackBar: some View {
+        let mine = store.tapbacks[message.guid] ?? message.mine
+        return HStack(spacing: 2) {
+            ForEach(HiddenMessages.tapbacks, id: \.key) { tapback in
+                EmojiButton(emoji: tapback.emoji, selected: mine == tapback.emoji) {
+                    picking = false
+                    store.react(tapback.emoji, to: message, in: chat)
+                }
+                .accessibilityLabel(tapback.key)
+            }
+        }
+        .padding(6)
     }
 
     private var avatar: some View {
@@ -251,12 +371,13 @@ struct MessageRow: View {
     @ViewBuilder private var menu: some View {
         let urls = message.attachments.map(\.url)
         ControlGroup {
-            ForEach(Tapbacks.all, id: \.key) { tapback in
+            ForEach(HiddenMessages.tapbacks, id: \.key) { tapback in
                 Button { store.react(tapback.emoji, to: message, in: chat) } label: { Image(nsImage: emojiImage(tapback.emoji)) }
                     .accessibilityLabel(tapback.key)
             }
         }
         .controlGroupStyle(.palette)
+        Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
         Button("Copy", systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
             if urls.isEmpty { NSPasteboard.general.setString(message.text, forType: .string) }
@@ -415,16 +536,32 @@ nonisolated func waveform(_ url: URL, bins: Int = 28) -> [CGFloat] {
 struct Composer: View {
     let store: Store
     let chat: Chat
+    /// The message a send goes in the thread of, from a swipe or the menu's Reply.
+    @Binding var replying: Message?
     @State private var draft = ""
+    @FocusState private var focused: Bool
 
     /// Hovering another avatar in the menu bar previews where a click goes.
     private var placeholder: String {
         if let other = store.hoverChat, other.id != chat.id { return "Switch to \(store.shortName(other))" }
-        return "Note to \(store.shortName(chat))…"
+        return "\(replying == nil ? "Note" : "Reply") to \(store.shortName(chat))…"
     }
+
+    private var recordingVoice: Bool { store.recorder.kind == .voice && store.recorder.chatID == chat.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let replying {
+                HStack(spacing: 6) {
+                    Label(replying.text.isEmpty ? "Attachment" : replying.text, systemImage: "arrowshape.turn.up.left")
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button { self.replying = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .transition(.blurReplace)
+            }
             if let files = store.drafts[chat.id], !files.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
@@ -435,10 +572,20 @@ struct Composer: View {
                 }
                 .scrollIndicators(.never)
             }
-            TextField(placeholder, text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit(sendAll)
+            if recordingVoice {
+                LiveWaveform(levels: store.recorder.levels).frame(height: 20)
+            } else {
+                TextField(placeholder, text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .focused($focused)
+                    .onSubmit(sendAll)
+                    .onKeyPress(.escape) {  // Esc drops the reply first, then closes the panel
+                        guard replying != nil else { return .ignored }
+                        withAnimation(.smooth(duration: 0.2)) { replying = nil }
+                        return .handled
+                    }
+            }
             if let error = store.sendError {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
@@ -453,7 +600,7 @@ struct Composer: View {
                             Text(recorder.stopHint)
                         } else {
                             TimelineView(.periodic(from: recorder.started, by: 1)) { context in
-                                Text(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))
+                                Text("Recording \(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))")
                             }
                             .monospacedDigit()
                         }
@@ -480,6 +627,8 @@ struct Composer: View {
         .padding(12)
         .background(.quaternary, in: .rect(cornerRadius: 18, style: .continuous))
         .padding(10)
+        .animation(.smooth(duration: 0.2), value: replying?.guid)
+        .onChange(of: replying?.guid) { if replying != nil { focused = true } }
     }
 
     /// Sends what's in the box: staged files, then the text. Clears the field at once; a failed send puts the
@@ -487,9 +636,14 @@ struct Composer: View {
     private func sendAll() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !store.drafts[chat.id, default: []].isEmpty else { return }
+        let original = replying
         draft = ""
+        replying = nil
         Task {
-            if await !store.sendDraft(text: text, to: chat), draft.isEmpty { draft = text }
+            if await !store.sendDraft(text: text, to: chat, replyingTo: original), draft.isEmpty {
+                draft = text
+                replying = original
+            }
         }
     }
 
@@ -517,7 +671,9 @@ struct Composer: View {
     private func finishRecording() {
         Task {
             do {
-                if let file = try await store.recorder.stop() { await store.send(file: file, to: chat) }
+                let original = replying
+                replying = nil
+                if let file = try await store.recorder.stop() { await store.send(file: file, to: chat, replyingTo: original) }
             } catch {
                 store.sendError = error.localizedDescription
             }
@@ -537,6 +693,47 @@ struct Composer: View {
                 .background(.quaternary, in: .capsule)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// How far a message is pulled sideways before letting go replies to it.
+private let replyReach: CGFloat = 56
+
+/// The microphone's loudness while recording, newest on the right. Quiet stretches read as dots.
+struct LiveWaveform: View {
+    let levels: [CGFloat]
+
+    var body: some View {
+        Canvas { context, size in
+            let pitch: CGFloat = 4, count = Int(size.width / pitch)
+            let shown = Array(repeating: 0, count: max(0, count - levels.count)) + levels.suffix(count)
+            for (i, level) in shown.enumerated() {
+                let h = max(2, level * size.height)
+                let bar = CGRect(x: CGFloat(i) * pitch, y: (size.height - h) / 2, width: 2, height: h)
+                context.fill(Path(roundedRect: bar, cornerRadius: 1), with: .color(level < 0.06 ? .secondary : .primary))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// One tapback in the double-click bar. Grows under the pointer.
+private struct EmojiButton: View {
+    let emoji: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(emoji).font(.system(size: 20))
+                .frame(width: 34, height: 34)
+                .background(selected ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: .circle)
+                .scaleEffect(hovering ? 1.15 : 1)
+                .animation(.smooth(duration: 0.12), value: hovering)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

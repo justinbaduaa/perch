@@ -1,17 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar item. Avatars overlap, left on top, and part around the one under the pointer (or the open chat);
-/// "•••" at the end lists chats beyond the bar. The item has one width, with a parting gap's worth of margin on
-/// each side at rest: a focused avatar stays exactly where it rests and its neighbours slide into the margins,
-/// so neither the menu bar nor the avatar under the pointer ever moves.
+/// The menu bar item. Avatars overlap, left on top, and all spread out side by side while the pointer is over the
+/// strip or the panel is open; "•••" at the end lists chats beyond the bar. The item is always as wide as the spread
+/// strip, with the overlapped stack centred in it, so the menu bar never moves.
 final class AvatarStrip {
-    static let size: CGFloat = 20, rest: CGFloat = 13, gap: CGFloat = 3
+    static let size: CGFloat = 20, rest: CGFloat = 13, gap: CGFloat = 4
     static let corner: CGFloat = 8  // squircle: closer to a circle than a square, like Hoy's
-    private static let part = size + gap - rest  // how far each side of a focused avatar opens
 
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private(set) var hovered: Int?
+    private var inside = false
     private let store: Store
     private var xs: [CGFloat] = []  // drawn x of each slot, eased toward the layout
     private var easing: Timer?
@@ -21,26 +20,20 @@ final class AvatarStrip {
     var bar: [Chat] { store.barChats }
     var moreSlot: Int? { store.chats.count > bar.count ? bar.count : nil }
     private var slots: Int { bar.count + (moreSlot == nil ? 0 : 1) }
-    private var focus: Int? { hovered ?? openSlot }
+    private var spread: Bool { inside || store.panelShown }
 
     /// Where `chat` lives in the strip: its avatar, or "•••" for a chat beyond the bar.
     func slot(of chat: Chat) -> Int? { bar.firstIndex { $0.id == chat.id } ?? moreSlot }
 
     private var openSlot: Int? { store.panelShown ? store.panelChat.flatMap(slot) ?? moreSlot : nil }
 
-    /// x of each slot. At rest the stack is centred; a focused slot keeps its resting x and its neighbours part from it.
-    static func layout(_ count: Int, parting focus: Int?) -> [CGFloat] {
-        let resting = (0..<count).map { part + CGFloat($0) * rest }
-        guard let focus, resting.indices.contains(focus) else { return resting }
-        var x: CGFloat = 0
-        let parted = (0..<count).map { i in
-            defer { x += focus == i || focus == i + 1 ? size + gap : rest }
-            return x
-        }
-        return parted.map { $0 + resting[focus] - parted[focus] }
+    /// x of each slot: side by side when spread, overlapping and centred at rest.
+    static func layout(_ count: Int, spread: Bool) -> [CGFloat] {
+        let inset = spread ? 0 : (width(count) - CGFloat(max(count - 1, 0)) * rest - size) / 2
+        return (0..<count).map { inset + CGFloat($0) * (spread ? size + gap : rest) }
     }
 
-    static func width(_ count: Int) -> CGFloat { count == 0 ? 0 : CGFloat(count - 1) * rest + size + 2 * part }
+    static func width(_ count: Int) -> CGFloat { count == 0 ? 0 : CGFloat(count) * size + CGFloat(count - 1) * gap }
 
     /// The strip on screen. Two points taller than the item, because the pointer can rest on the screen's top edge.
     var rect: NSRect {
@@ -50,46 +43,43 @@ final class AvatarStrip {
         return NSRect(x: r.midX - w / 2, y: r.minY, width: w, height: r.height + 2)
     }
 
-    /// The slot under a screen point. The hovered slot keeps the pointer across its resting box plus a gap,
-    /// so moving within it never flips to a neighbour.
+    /// The slot under a screen point, in the spread layout (the strip spreads as soon as the pointer is over it).
+    /// Each slot owns half the gap on either side, so the pointer is never between two.
     func slot(at point: NSPoint) -> Int? {
         let r = rect
         guard r.contains(point), slots > 0 else { return nil }
-        let x = point.x - r.minX
-        if let h = hovered, h < slots {
-            let start = Self.layout(slots, parting: nil)[h]
-            if x >= start - Self.gap, x < start + Self.size + Self.gap { return h }
-        }
-        let drawn = Self.layout(slots, parting: focus)
-        return drawn.indices.first { x >= drawn[$0] && x < drawn[$0] + Self.size }  // left is on top
+        return min(slots - 1, Int((point.x - r.minX + Self.gap / 2) / (Self.size + Self.gap)))
     }
 
-    /// Screen point just under the menu bar, centred on `slot`, which never moves when it is focused.
+    /// Screen point just under the menu bar, centred on `slot` as the spread strip draws it.
     func anchor(under slot: Int) -> NSPoint {
-        let resting = Self.layout(slots, parting: nil)
-        guard resting.indices.contains(slot) else { return NSPoint(x: rect.midX, y: rect.minY - 6) }  // empty strip
-        return NSPoint(x: rect.minX + resting[slot] + Self.size / 2, y: rect.minY - 6)
+        let spread = Self.layout(slots, spread: true)
+        guard spread.indices.contains(slot) else { return NSPoint(x: rect.midX, y: rect.minY - 6) }  // empty strip
+        return NSPoint(x: rect.minX + spread[slot] + Self.size / 2, y: rect.minY - 6)
     }
 
-    /// Returns true when the hovered slot changed.
+    /// Spreads or gathers the strip as the pointer enters or leaves. Returns true when the hovered slot changed.
     func pointerMoved() -> Bool {
-        let now = slot(at: NSEvent.mouseLocation)
+        let at = NSEvent.mouseLocation, now = slot(at: at)
+        if rect.contains(at) != inside {
+            inside.toggle()
+            update()
+        }
         guard now != hovered else { return false }
         hovered = now
-        update()
         return true
     }
 
     /// Eases toward the layout for the current bar, hover and open chat. Stops once settled, so it costs nothing at rest.
     func update() {
         if xs.count != slots || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            xs = Self.layout(slots, parting: focus)
+            xs = Self.layout(slots, spread: spread)
         }
         draw()
         guard easing == nil else { return }
         easing = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in
             MainActor.assumeIsolated {
-                let target = Self.layout(slots, parting: focus)  // read every tick, so a new hover retargets mid-flight
+                let target = Self.layout(slots, spread: spread)  // read every tick, so leaving mid-spread turns it around
                 if xs.count != target.count { xs = target }
                 if xs.indices.allSatisfy({ abs(target[$0] - xs[$0]) < 0.25 }) {
                     xs = target
@@ -118,11 +108,10 @@ final class AvatarStrip {
         let recording = bar.firstIndex { $0.id == store.recorder.chatID }
         let strip = ZStack(alignment: .leading) {
             ForEach(Array(bar.enumerated()), id: \.element.id) { i, chat in
+                // Red while recording for them, white for the open chat, blue for something unread.
+                let ring: Color? = i == recording ? .red : i == open ? .primary : store.isUnread(chat) ? .blue : nil
                 Avatar(image: store.photo(chat), name: store.name(chat), size: size, cornerRadius: Self.corner)
-                    .overlay {
-                        shape.strokeBorder(i == recording ? .red : i == open ? Color.primary : rim,
-                                           lineWidth: i == recording || i == open ? 1.5 : 1)
-                    }
+                    .overlay { shape.strokeBorder(ring ?? rim, lineWidth: ring == nil ? 1 : 1.5) }
                     .offset(x: xs[i])
                     .zIndex(Double(bar.count - i))
             }

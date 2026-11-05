@@ -22,7 +22,8 @@ import Testing
         CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
           date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
-          associated_message_guid TEXT, associated_message_emoji TEXT);
+          associated_message_guid TEXT, associated_message_emoji TEXT, is_read INTEGER DEFAULT 0,
+          thread_originator_guid TEXT);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
         CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT);
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
@@ -45,6 +46,8 @@ import Testing
         INSERT INTO chat_message_join VALUES (2, 9, 500);
         INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg'), (2, '/nope/gone.jpg', 'image/jpeg');
         INSERT INTO message_attachment_join VALUES (3, 1), (8, 2);
+        UPDATE message SET thread_originator_guid = 'A' WHERE ROWID = 3;
+        UPDATE message SET is_read = 1 WHERE ROWID IN (1, 3);
         """
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
@@ -52,6 +55,7 @@ import Testing
     let messages = try MessagesDB(path: path)
     #expect(try messages.chats().map(\.groupName) == [nil, "Team"])
     #expect(try messages.chats().first?.handles == ["+15551234567"])
+    #expect(try messages.chats().map(\.unread) == [8, 9])  // their unread D came after my last message (R2)
 
     let rows = try messages.messages(chat: 1)
     #expect(rows.map(\.text) == ["hello", "from attributedBody", ""])
@@ -59,6 +63,7 @@ import Testing
     #expect(rows.map(\.mine) == ["😂", nil, nil])  // the 😂 on A is mine
     #expect(rows[1].fromMe && rows[0].sender == "+15551234567")
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
+    #expect(rows.map(\.replyTo) == [nil, nil, "A"])
 
     #expect(ContactBook.key("+1 (555) 123-4567") == ContactBook.key("5551234567"))
 }
@@ -79,15 +84,15 @@ import Testing
     #expect(file.landed(in: [row("", file: "/Users/x/Library/Messages/Attachments/ab/IMG_1.heic")]))
 }
 
-/// Hovering never moves the hovered avatar, and parting never needs more than the strip's fixed width.
-@Test func focusedAvatarHoldsStillInsideAFixedWidth() {
+/// Spread or gathered, the strip fits one width, and at rest the stack sits in the middle of it.
+@Test func stripKeepsOneWidth() {
     for count in 1...6 {
-        let resting = AvatarStrip.layout(count, parting: nil), width = AvatarStrip.width(count)
-        for focus in 0..<count {
-            let parted = AvatarStrip.layout(count, parting: focus)
-            #expect(parted[focus] == resting[focus])
-            #expect(parted.allSatisfy { $0 >= 0 && $0 + AvatarStrip.size <= width })
+        let width = AvatarStrip.width(count)
+        for spread in [false, true] {
+            #expect(AvatarStrip.layout(count, spread: spread).allSatisfy { $0 >= 0 && $0 + AvatarStrip.size <= width })
         }
+        let rest = AvatarStrip.layout(count, spread: false)
+        #expect(abs(rest[0] - (width - rest[count - 1] - AvatarStrip.size)) < 0.001)
     }
 }
 

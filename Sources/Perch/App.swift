@@ -53,16 +53,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A screen capture outlives the app otherwise, recording with nothing in Perch to stop it.
     func applicationWillTerminate(_ notification: Notification) { store.recorder.discard() }
 
-    /// Parts the strip around the hovered avatar; with the panel open, its composer says "Switch to …".
+    /// Names the hovered avatar in a pill under it, which grows into the panel on click. With the panel open,
+    /// its composer says "Switch to …" instead.
     private func pointerMoved() {
         guard strip.pointerMoved() else { return }
         store.hoverChat = strip.hovered.flatMap { $0 < strip.bar.count ? strip.bar[$0] : nil }
+        guard !store.panelShown else { return }
+        if let slot = strip.hovered { _ = showPill(label(store.hoverChat), at: strip.anchor(under: slot)) } else { pill.orderOut(nil) }
+    }
+
+    /// "Oliver · 2 hrs ago" for a chat, "Chats" for the list behind "•••".
+    private func label(_ chat: Chat?) -> String {
+        guard let chat else { return "Chats" }
+        return "\(store.shortName(chat)) · \(chat.lastActive.formatted(.relative(presentation: .numeric, unitsStyle: .narrow)))"
     }
 
     @objc private func clicked() {
         guard let button = strip.item.button else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
+            if let slot = strip.slot(at: NSEvent.mouseLocation), slot < strip.bar.count {
+                let chat = strip.bar[slot]
+                let title = "\(store.pins.contains(chat.guid) ? "Unpin" : "Pin") \(store.shortName(chat))"
+                let item = menu.addItem(withTitle: title, action: #selector(togglePin), keyEquivalent: "")
+                item.target = self
+                item.representedObject = chat.guid
+                menu.addItem(.separator())
+            }
             menu.addItem(withTitle: "Quit Perch", action: #selector(NSApplication.terminate), keyEquivalent: "q")
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
             return
@@ -73,12 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         show(chat, under: slot)
     }
 
+    @objc private func togglePin(_ item: NSMenuItem) {
+        if let chat = store.chats.first(where: { $0.guid == item.representedObject as? String }) { store.togglePin(chat) }
+    }
+
     // MARK: Panel
 
     /// Grows the panel out of a name pill under the chat's slot, or slides it over when already open.
     /// No chat shows the list of every chat.
     private func show(_ chat: Chat?, under slot: Int? = nil) {
         let slot = slot ?? chat.flatMap(strip.slot) ?? 0
+        store.markSeen(chat)
         NSApp.activate()
         if store.panelShown {
             withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
@@ -99,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.alphaValue = 1
             return panel.makeKeyAndOrderFront(nil)
         }
-        let start = showPill(chat.map(store.name) ?? "Chats", at: strip.anchor(under: slot))
+        let start = showPill(label(chat), at: strip.anchor(under: slot))
         Task {
             try? await Task.sleep(for: .milliseconds(80))  // the pill holds a beat, then grows into the panel
             panel.setFrame(Self.padded(start), display: false)
@@ -125,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let box = NSView(frame: padded(NSRect(origin: .zero, size: size)).offsetBy(dx: margin, dy: margin))
         let glass = NSGlassEffectView(frame: NSRect(x: margin, y: margin, width: size.width, height: size.height))
         glass.cornerRadius = radius
+        glass.tintColor = .black.withAlphaComponent(0.3)  // a shade darker than plain glass, so text holds up on light pages
         glass.autoresizingMask = [.width, .height]
         glass.contentView = content
         box.addSubview(glass)
