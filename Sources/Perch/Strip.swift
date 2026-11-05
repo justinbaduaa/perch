@@ -64,8 +64,9 @@ final class AvatarStrip {
 
     /// Screen point just under the menu bar, centred on `slot` as it sits when parted.
     func anchor(under slot: Int) -> NSPoint {
-        let x = Self.layout(slots, parting: slot)[min(slot, slots - 1)]
-        return NSPoint(x: rect.minX + x + Self.size / 2, y: rect.minY - 6)
+        let layout = Self.layout(slots, parting: slot)
+        let x = layout.indices.contains(slot) ? layout[slot] + Self.size / 2 : rect.width / 2  // empty strip: under the icon
+        return NSPoint(x: rect.minX + x, y: rect.minY - 6)
     }
 
     /// Returns true when the hovered slot changed.

@@ -31,6 +31,8 @@ struct Pending: Identifiable {
     private(set) var chats: [Chat] = []
     private(set) var revision = 0
     private(set) var needsAccess = false
+    /// Why chat.db could not be read when it is readable, shown in the panel instead of failing silently.
+    private(set) var readError: String?
     private(set) var pending: [Pending] = []
     private(set) var sendError: String?
     /// Message guid to reminder time. The system keeps the reminders, as pending notifications keyed by guid.
@@ -125,6 +127,7 @@ struct Pending: Identifiable {
             }
             let max = try db!.maxRowID()
             needsAccess = false
+            readError = nil
             guard max != lastRowID else { return }
             lastRowID = max
             chats = try db!.chats()
@@ -132,7 +135,7 @@ struct Pending: Identifiable {
         } catch {
             db = nil
             needsAccess = !FileManager.default.isReadableFile(atPath: MessagesDB.path)
-            if !needsAccess { print("Perch: chat.db read failed: \(error)") }
+            readError = needsAccess ? nil : "\(error)"
         }
         onChange()  // only reached on a change or a failure
     }

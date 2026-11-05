@@ -12,6 +12,8 @@ struct PanelRoot: View {
         Group {
             if store.needsAccess {
                 AccessView()
+            } else if let error = store.readError {
+                ContentUnavailableView("Can't read Messages", systemImage: "exclamationmark.bubble", description: Text(error))
             } else if let chat = store.panelChat {
                 ConversationView(store: store, chat: chat, openInMessages: openInMessages)
                     .id(chat.id)
