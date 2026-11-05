@@ -61,3 +61,19 @@ import Testing
 
     #expect(ContactBook.key("+1 (555) 123-4567") == ContactBook.key("5551234567"))
 }
+
+/// A pending send stops showing once a matching row from me lands, and not before.
+@Test func pendingSendSettlesWhenItsRowLands() {
+    let sent = Date.now
+    let text = Pending(id: -1, chatID: 1, text: "on it", file: nil, date: sent)
+    let file = Pending(id: -2, chatID: 1, text: "", file: URL(filePath: "/tmp/a/IMG_1.heic"), date: sent)
+    func row(_ text: String, fromMe: Bool = true, at date: Date = sent, file: String? = nil) -> Message {
+        Message(id: 1, guid: "g", date: date, fromMe: fromMe, sender: nil, text: text,
+                attachments: file.map { [Attachment(url: URL(filePath: $0), mime: "image/heic")] } ?? [])
+    }
+    #expect(!text.landed(in: [row("on it", fromMe: false)]))
+    #expect(!text.landed(in: [row("on it", at: sent.addingTimeInterval(-60))]))  // an older identical message
+    #expect(text.landed(in: [row("on it")]))
+    #expect(!file.landed(in: [row("on it")]))
+    #expect(file.landed(in: [row("", file: "/Users/x/Library/Messages/Attachments/ab/IMG_1.heic")]))
+}

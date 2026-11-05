@@ -9,11 +9,16 @@ enum MessagesApp {
         }
     }
 
+    /// A fixture database has no Messages behind it, so with PERCH_DB set a send only pretends.
+    private static let dryRun = ProcessInfo.processInfo.environment["PERCH_DB"] != nil
+
     static func send(text: String, to chat: Chat) async throws {
+        if dryRun { return try await Task.sleep(for: .milliseconds(700)) }
         try await run(chat, kind: "text", payload: text)
     }
 
     static func send(file: URL, to chat: Chat) async throws {
+        if dryRun { return try await Task.sleep(for: .milliseconds(700)) }
         try await run(chat, kind: "file", payload: stage(file).path)
     }
 

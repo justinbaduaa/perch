@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import SwiftUI
 
 /// SwiftUI owns the lifecycle so the app gets a standard main menu (Cmd-C/V/Q work in the panel).
@@ -7,26 +8,35 @@ import SwiftUI
     var body: some Scene { Settings { EmptyView() } }
 }
 
-/// Menu bar strip of avatars. Clicking one drops a glass panel with that conversation under it.
+/// Clicking an avatar in the strip shows its name in a pill, which grows into a glass panel with the conversation.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = Store()
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private lazy var strip = AvatarStrip(store: store)
     private lazy var panel = makePanel()
+    private let pill = AppDelegate.floatingPanel()
     private var mouseDownAt = NSPoint.zero
-    private static let avatar: CGFloat = 20, stride: CGFloat = 17  // avatars overlap by 3pt
+    private static let width: CGFloat = 340, height: CGFloat = 540
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        item.button?.target = self
-        item.button?.action = #selector(clicked)
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        store.onChange = { [unowned self] in drawBar() }
+        guard let button = strip.item.button else { return }
+        button.target = self
+        button.action = #selector(clicked)
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        pill.ignoresMouseEvents = true
+        store.onChange = { [unowned self] in strip.update() }
         store.start()
-        drawBar()
+        strip.update()
 
-        // Close on a click in another app, but not on a drag: dragging files in from Finder is how you drop them.
+        // The status button is drawn outside this process, so tracking areas on it never fire; watch the pointer instead.
+        NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [unowned self] _ in pointerMoved() }
+        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [unowned self] event in pointerMoved(); return event }
+
+        // Close on a click elsewhere, but not on a drag: dragging files in from Finder is how you drop them.
+        // Clicks on the strip arrive here too (another process draws it); `clicked` handles those.
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown]) { [unowned self] event in
             let at = NSEvent.mouseLocation
+            guard !strip.rect.contains(at) else { return }
             switch event.type {
             case .leftMouseDown: mouseDownAt = at
             case .leftMouseUp where hypot(at.x - mouseDownAt.x, at.y - mouseDownAt.y) < 4: hidePanel()
@@ -36,75 +46,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func drawBar() {
-        let bar = store.barChats
-        item.button?.setAccessibilityLabel(bar.isEmpty ? "Perch" : bar.map(store.name).joined(separator: ", "))
-        guard !bar.isEmpty else {
-            item.button?.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: "Perch")
-            return
-        }
-        let open = panel.isVisible ? store.panelChat?.id : nil
-        let store = store
-        let renderer = ImageRenderer(content: HStack(spacing: Self.stride - Self.avatar) {
-            ForEach(bar) { chat in
-                Avatar(image: store.photo(chat), name: store.name(chat), size: Self.avatar)
-                    .overlay { if chat.id == open { Circle().strokeBorder(.white, lineWidth: 1.5) } }
-            }
-        })
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
-        item.button?.image = renderer.nsImage
+    /// Parts the strip around the hovered avatar; with the panel open, its composer says "Switch to …".
+    private func pointerMoved() {
+        guard strip.pointerMoved() else { return }
+        store.hoverChat = strip.hovered.flatMap { $0 < strip.bar.count ? strip.bar[$0] : nil }
     }
 
     @objc private func clicked() {
-        guard let button = item.button else { return }
-        let event = NSApp.currentEvent  // not a mouse event when pressed through VoiceOver
-        if event?.type == .rightMouseUp {
+        guard let button = strip.item.button else { return }
+        if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             menu.addItem(withTitle: "Quit Perch", action: #selector(NSApplication.terminate), keyEquivalent: "q")
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
             return
         }
-        let bar = store.barChats
-        let inset = (button.bounds.width - (button.image?.size.width ?? 0)) / 2
-        let x = event.flatMap { $0.type == .leftMouseUp ? button.convert($0.locationInWindow, from: nil).x - inset : nil } ?? 0
-        let index = min(max(Int(x / Self.stride), 0), max(bar.count - 1, 0))
-        let chat = bar.isEmpty ? nil : bar[index]
-        if panel.isVisible && store.panelChat?.id == chat?.id { return hidePanel() }
-        store.panelChat = chat
-        showPanel(under: index)
+        let slot = strip.slot(at: NSEvent.mouseLocation) ?? 0  // VoiceOver presses have no pointer over the strip
+        if slot == strip.moreSlot { return showOthers(under: slot) }
+        guard slot < strip.bar.count else { return show(nil) }
+        let chat = strip.bar[slot]
+        if store.panelShown && store.panelChat?.id == chat.id { return hidePanel() }
+        show(chat)
     }
 
-    private func showPanel(under index: Int) {
-        guard let button = item.button, let barWindow = button.window else { return }
-        let rect = barWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        let inset = (rect.width - (button.image?.size.width ?? 0)) / 2
-        let centerX = rect.minX + inset + CGFloat(index) * Self.stride + Self.avatar / 2
-        let size = panel.frame.size
-        let screen = barWindow.screen?.visibleFrame ?? rect
-        let x = min(max(centerX - size.width / 2, screen.minX + 8), screen.maxX - size.width - 8)
-        let frame = NSRect(x: x, y: rect.minY - 6 - size.height, width: size.width, height: size.height)
-
-        let wasVisible = panel.isVisible
-        NSApp.activate()
-        panel.makeKeyAndOrderFront(nil)
-        if wasVisible {
-            panel.animator().setFrame(frame, display: true)
-        } else {
-            panel.setFrame(frame.offsetBy(dx: 0, dy: 10), display: false)
-            panel.alphaValue = 0
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.18
-                panel.animator().setFrame(frame, display: true)
-                panel.animator().alphaValue = 1
-            }
+    /// "•••": every recent chat that isn't in the bar.
+    private func showOthers(under slot: Int) {
+        guard let button = strip.item.button else { return }
+        let menu = NSMenu()
+        let barIDs = Set(strip.bar.map(\.id))
+        for chat in store.chats.filter({ !barIDs.contains($0.id) }).prefix(15) {
+            let entry = menu.addItem(withTitle: store.name(chat), action: #selector(pickOther), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = chat
+            let avatar = ImageRenderer(content: Avatar(image: store.photo(chat), name: store.name(chat), size: 18))
+            avatar.scale = 2
+            entry.image = avatar.nsImage
         }
-        drawBar()
+        let x = strip.anchor(under: slot).x - strip.rect.minX + (button.bounds.width - strip.rect.width) / 2
+        menu.popUp(positioning: nil, at: NSPoint(x: x - 10, y: button.bounds.maxY + 4), in: button)
     }
 
+    @objc private func pickOther(_ sender: NSMenuItem) { show(sender.representedObject as? Chat) }
+
+    // MARK: Panel
+
+    /// Grows the panel out of a name pill under the chat's slot, or slides it over when already open.
+    private func show(_ chat: Chat?) {
+        NSApp.activate()
+        if store.panelShown {
+            withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
+            strip.update()
+            let target = frame(for: chat)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.3
+                panel.animator().setFrame(target, display: true)
+            }
+            return panel.makeKey()
+        }
+        store.panelChat = chat
+        let target = frame(for: chat)
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            store.panelShown = true
+            strip.update()
+            panel.setFrame(target, display: true)
+            panel.alphaValue = 1
+            return panel.makeKeyAndOrderFront(nil)
+        }
+        let start = showPill(chat.map(store.name) ?? "Perch", at: strip.anchor(under: chat.flatMap(strip.slot) ?? 0))
+        Task {
+            try? await Task.sleep(for: .milliseconds(140))  // the pill holds a beat, then grows into the panel
+            panel.setFrame(start, display: false)
+            panel.alphaValue = 0
+            panel.makeKeyAndOrderFront(nil)
+            withAnimation(.smooth(duration: 0.45)) { store.panelShown = true }
+            strip.update()
+            await NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.45
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.2, 1)
+                panel.animator().setFrame(target, display: true)
+                panel.animator().alphaValue = 1
+                pill.animator().alphaValue = 0
+            }
+            pill.orderOut(nil)
+        }
+    }
+
+    /// The panel's resting frame: centred under the chat's slot, kept on screen.
+    private func frame(for chat: Chat?) -> NSRect {
+        let at = strip.anchor(under: chat.flatMap(strip.slot) ?? 0)
+        let screen = strip.item.button?.window?.screen?.visibleFrame ?? .infinite
+        let x = min(max(at.x - Self.width / 2, screen.minX + 8), screen.maxX - Self.width - 8)
+        return NSRect(x: x, y: at.y - Self.height, width: Self.width, height: Self.height)
+    }
+
+    /// The name in a glass capsule under the menu bar. Returns its frame, which the panel grows from.
+    private func showPill(_ name: String, at: NSPoint) -> NSRect {
+        let label = NSHostingView(rootView: Text(name).font(.callout.weight(.semibold)).lineLimit(1)
+            .padding(.horizontal, 12).padding(.vertical, 6).fixedSize())
+        let size = label.fittingSize
+        let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
+        glass.cornerRadius = size.height / 2
+        glass.contentView = label
+        pill.contentView = glass
+        let frame = NSRect(x: at.x - size.width / 2, y: at.y - size.height, width: size.width, height: size.height)
+        pill.setFrame(frame, display: true)
+        pill.alphaValue = 1
+        pill.orderFront(nil)
+        return frame
+    }
+
+    /// Blurs the content out while the window shrinks back toward the menu bar.
     private func hidePanel() {
-        guard panel.isVisible else { return }
-        panel.orderOut(nil)
-        drawBar()
+        guard store.panelShown else { return }
+        withAnimation(.smooth(duration: 0.2)) { store.panelShown = false }
+        strip.update()
+        let f = panel.frame
+        let end = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? f : NSRect(x: f.midX - 60, y: f.maxY - 30, width: 120, height: 30)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            panel.animator().setFrame(end, display: true)
+            panel.animator().alphaValue = 0
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(240))
+            if !store.panelShown { panel.orderOut(nil); pill.orderOut(nil) }  // unless reopened mid-animation
+        }
     }
 
     /// A 1:1 chat opens on its thread. Messages has no public link to a group thread, so a group opens the app.
@@ -116,26 +181,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makePanel() -> NSPanel {
-        let panel = KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 540),
-                                 styleMask: [.borderless], backing: .buffered, defer: true)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
+        let panel = Self.floatingPanel()
         panel.hasShadow = true
-        panel.level = .floating  // stays above Finder while files are dragged in
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let glass = NSGlassEffectView(frame: panel.contentLayoutRect)
-        glass.cornerRadius = 26
-        glass.contentView = NSHostingView(rootView: PanelRoot(
+        let host = NSHostingView(rootView: PanelRoot(
             store: store,
             openInMessages: { [unowned self] in openInMessages() },
             close: { [unowned self] in hidePanel() }))
+        host.sizingOptions = []
+        // The glass is the window's content, so the window takes its rounded shape. The glass pins its contentView
+        // edge to edge, so that is a bare container with no size of its own; the panel inside keeps full size,
+        // pinned top-centre, and is revealed as the window grows out of the pill.
+        let bounds = NSRect(x: 0, y: 0, width: Self.width, height: Self.height)
+        let glass = NSGlassEffectView(frame: bounds)
+        glass.cornerRadius = 26
+        let container = NSView(frame: bounds)
+        host.frame = bounds
+        host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+        container.addSubview(host)
+        glass.contentView = container
         panel.contentView = glass
+        Preview.shared.window = panel
+        return panel
+    }
+
+    /// Borderless, clear, above Finder (so files can be dragged in), on every Space.
+    private static func floatingPanel() -> KeyablePanel {
+        let panel = KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                                 styleMask: [.borderless], backing: .buffered, defer: true)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         return panel
     }
 }
 
 /// Borderless panels refuse key status by default, which would block typing.
+/// It also takes control of Quick Look, so previews know which thumbnail they zoom out of.
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    nonisolated override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+    nonisolated override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { Preview.shared.begin(panel) }
+    }
+    nonisolated override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {}
 }
