@@ -89,3 +89,23 @@ import Testing
         }
     }
 }
+
+/// Only a video in a capture folder made after recording started counts; old captures and screenshots don't.
+@Test func picksUpOnlyTheNewCleanShotVideo() throws {
+    let media = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: media) }
+    func capture(_ folder: String, _ file: String) throws -> URL {
+        let dir = media.appending(path: folder)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appending(path: file)
+        try Data([0]).write(to: url)
+        return url
+    }
+    _ = try capture("media_old", "CleanShot old.mp4")
+    let since = Date.now
+    _ = try capture("media_shot", "CleanShot shot.png")
+    #expect(Recorder.capture(in: media, since: since) == nil)
+    let video = try capture("media_new", "CleanShot new.mp4")
+    let found = Recorder.capture(in: media, since: since)
+    #expect(found?.resolvingSymlinksInPath() == video.resolvingSymlinksInPath(), "found \(String(describing: found)) want \(video)")
+}

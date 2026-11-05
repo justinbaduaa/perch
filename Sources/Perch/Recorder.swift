@@ -1,7 +1,8 @@
+import AppKit
 import AVFoundation
 import CoreGraphics
 
-/// Records a voice note, or the screen through macOS's capture toolbar, for one chat at a time.
+/// Records a voice note, or the screen through CleanShot X (or macOS's capture toolbar without it), for one chat at a time.
 @Observable final class Recorder {
     enum Kind { case voice, screen }
     struct Failure: LocalizedError { let errorDescription: String? }
@@ -13,11 +14,14 @@ import CoreGraphics
     private(set) var finishing = false
     /// A finished screen capture, waiting for Send.
     private(set) var ready: URL?
+    /// Where the running screen capture is stopped.
+    private(set) var stopHint = ""
     /// Called with the chat id when a screen capture ends, stopped or cancelled, so the panel can come back.
     @ObservationIgnored var onScreenEnded: (Int64) -> Void = { _ in }
     @ObservationIgnored private var audio: AVAudioRecorder?
     @ObservationIgnored private var screen: Process?
     @ObservationIgnored private var file: URL?
+    @ObservationIgnored private var watch: Task<Void, Never>?
 
     func start(_ kind: Kind, for chat: Chat) async throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -34,6 +38,12 @@ import CoreGraphics
             guard recorder.record() else { throw Failure(errorDescription: "Couldn't start recording.") }
             audio = recorder
             file = url
+        case .screen where NSWorkspace.shared.urlForApplication(withBundleIdentifier: "pl.maketheweb.cleanshotx") != nil:
+            // CleanShot's recorder picks the area, window or display, and has pause, restart and stop.
+            NSWorkspace.shared.open(URL(string: "cleanshot://record-screen")!)
+            stopHint = "Recording in CleanShot"
+            let since = Date.now
+            watch = Task { await waitForCleanShot(since: since) }
         case .screen:
             guard CGPreflightScreenCaptureAccess() else {
                 CGRequestScreenCaptureAccess()
@@ -48,6 +58,7 @@ import CoreGraphics
             try process.run()
             screen = process
             file = url
+            stopHint = "Stop with ⌃⌘⎋"  // the menu bar's Stop Sharing cancels instead, without a file
             Task { await waitForScreen(process, url: url) }
         }
         self.kind = kind
@@ -67,6 +78,7 @@ import CoreGraphics
         audio?.stop()
         audio?.deleteRecording()
         screen?.terminate()  // SIGTERM ends the toolbar session without writing a file
+        watch?.cancel()
         reset()
     }
 
@@ -84,6 +96,32 @@ import CoreGraphics
             reset()  // cancelled in the toolbar
         }
         onScreenEnded(chatID)
+    }
+
+    /// CleanShot can't hand a recording back, but it keeps every capture in its media folder, one folder each.
+    /// Take the first new video there once it stops growing, which is when CleanShot has finished writing it.
+    private func waitForCleanShot(since: Date) async {
+        let media = URL.homeDirectory.appending(path: "Library/Application Support/CleanShot/media")
+        var lastSize = -1
+        while !Task.isCancelled, let chatID {
+            if let video = Self.capture(in: media, since: since) {
+                let size = (try? video.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if size > 0, size == lastSize {
+                    ready = video.pathExtension.lowercased() == "mov" ? await Self.shrink(video) : video
+                    return onScreenEnded(chatID)
+                }
+                lastSize = size
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    static func capture(in media: URL, since: Date) -> URL? {
+        let folders = (try? FileManager.default.contentsOfDirectory(at: media, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        return folders
+            .filter { ((try? $0.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast) > since }
+            .flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [] }
+            .first { ["mp4", "mov", "gif"].contains($0.pathExtension.lowercased()) }
     }
 
     /// Screen recordings run about 1.7 MB a second, past iMessage's limit within a minute, so re-encode as HEVC.
@@ -105,6 +143,8 @@ import CoreGraphics
         screen = nil
         file = nil
         ready = nil
+        stopHint = ""
+        watch = nil
         kind = nil
         chatID = nil
         finishing = false

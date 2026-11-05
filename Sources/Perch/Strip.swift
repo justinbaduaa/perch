@@ -26,7 +26,7 @@ final class AvatarStrip {
     /// Where `chat` lives in the strip: its avatar, or "•••" for a chat beyond the bar.
     func slot(of chat: Chat) -> Int? { bar.firstIndex { $0.id == chat.id } ?? moreSlot }
 
-    private var openSlot: Int? { store.panelShown ? store.panelChat.flatMap(slot) : nil }
+    private var openSlot: Int? { store.panelShown ? store.panelChat.flatMap(slot) ?? moreSlot : nil }
 
     /// x of each slot. At rest the stack is centred; a focused slot keeps its resting x and its neighbours part from it.
     static func layout(_ count: Int, parting focus: Int?) -> [CGFloat] {

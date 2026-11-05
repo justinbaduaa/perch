@@ -19,7 +19,7 @@ struct PanelRoot: View {
                     .id(chat.id)
                     .transition(.blurReplace)
             } else {
-                ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right")
+                PeopleView(store: store)
             }
         }
         .frame(width: 340, height: 540)
@@ -30,6 +30,60 @@ struct PanelRoot: View {
         .blur(radius: store.panelShown ? 0 : 14)
         .opacity(store.panelShown ? 1 : 0)
         .onExitCommand(perform: close)
+    }
+}
+
+/// Every chat, newest first, behind a search field. Return opens the top match.
+struct PeopleView: View {
+    let store: Store
+    @State private var search = ""
+    @State private var hovered: Chat.ID?
+    @FocusState private var focused: Bool
+
+    private var matches: [Chat] {
+        search.isEmpty ? store.chats : store.chats.filter { store.name($0).localizedCaseInsensitiveContains(search) }
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            TextField("Search", text: $search)
+                .textFieldStyle(.plain)
+                .focused($focused)
+                .onSubmit { if let top = matches.first { open(top) } }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(.quaternary, in: .rect(cornerRadius: 14, style: .continuous))
+                .padding([.horizontal, .top], 12)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(matches) { chat in
+                        Button { open(chat) } label: {
+                            HStack(spacing: 10) {
+                                Avatar(image: store.photo(chat), name: store.name(chat), size: 28)
+                                Text(store.name(chat)).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(hovered == chat.id ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                                        in: .rect(cornerRadius: 10, style: .continuous))
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { hovered = $0 ? chat.id : nil }
+                    }
+                }
+                .padding(.horizontal, 6).padding(.bottom, 8)
+            }
+            .scrollIndicators(.never)
+        }
+        .task {
+            try? await Task.sleep(for: .milliseconds(400))  // after the panel has grown and become key, or focus won't stick
+            focused = true
+        }
+    }
+
+    private func open(_ chat: Chat) {
+        withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
+        store.onChange()  // the strip rings the open chat
     }
 }
 
@@ -80,6 +134,7 @@ struct ConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            .scrollIndicators(.never)
             Composer(store: store, chat: chat)
         }
         .overlay {
@@ -372,7 +427,7 @@ struct Composer: View {
                         } else if recorder.finishing {
                             Text("Preparing…")
                         } else if recorder.kind == .screen {
-                            Text("Stop in the menu bar")  // the system's capture owns the stop button
+                            Text(recorder.stopHint)
                         } else {
                             TimelineView(.periodic(from: recorder.started, by: 1)) { context in
                                 Text(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))

@@ -68,41 +68,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let slot = strip.slot(at: NSEvent.mouseLocation) ?? 0  // VoiceOver presses have no pointer over the strip
-        if slot == strip.moreSlot { return showOthers(under: slot) }
-        guard slot < strip.bar.count else { return show(nil) }
-        let chat = strip.bar[slot]
-        if store.panelShown && store.panelChat?.id == chat.id { return hidePanel() }
-        show(chat)
+        let chat = slot < strip.bar.count ? strip.bar[slot] : nil  // "•••" opens the searchable list of every chat
+        if store.panelShown && store.panelChat?.id == chat?.id { return hidePanel() }
+        show(chat, under: slot)
     }
-
-    /// "•••": every recent chat that isn't in the bar.
-    private func showOthers(under slot: Int) {
-        guard let button = strip.item.button else { return }
-        let menu = NSMenu()
-        let barIDs = Set(strip.bar.map(\.id))
-        for chat in store.chats.filter({ !barIDs.contains($0.id) }).prefix(15) {
-            let entry = menu.addItem(withTitle: store.name(chat), action: #selector(pickOther), keyEquivalent: "")
-            entry.target = self
-            entry.representedObject = chat
-            let avatar = ImageRenderer(content: Avatar(image: store.photo(chat), name: store.name(chat), size: 18))
-            avatar.scale = 2
-            entry.image = avatar.nsImage
-        }
-        let x = strip.anchor(under: slot).x - strip.rect.minX + (button.bounds.width - strip.rect.width) / 2
-        menu.popUp(positioning: nil, at: NSPoint(x: x - 10, y: button.bounds.maxY + 4), in: button)
-    }
-
-    @objc private func pickOther(_ sender: NSMenuItem) { show(sender.representedObject as? Chat) }
 
     // MARK: Panel
 
     /// Grows the panel out of a name pill under the chat's slot, or slides it over when already open.
-    private func show(_ chat: Chat?) {
+    /// No chat shows the list of every chat.
+    private func show(_ chat: Chat?, under slot: Int? = nil) {
+        let slot = slot ?? chat.flatMap(strip.slot) ?? 0
         NSApp.activate()
         if store.panelShown {
             withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
             strip.update()
-            let target = frame(for: chat)
+            let target = frame(under: slot)
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.3
                 panel.animator().setFrame(Self.padded(target), display: true)
@@ -110,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return panel.makeKey()
         }
         store.panelChat = chat
-        let target = frame(for: chat)
+        let target = frame(under: slot)
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             store.panelShown = true
             strip.update()
@@ -118,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.alphaValue = 1
             return panel.makeKeyAndOrderFront(nil)
         }
-        let start = showPill(chat.map(store.name) ?? "Perch", at: strip.anchor(under: chat.flatMap(strip.slot) ?? 0))
+        let start = showPill(chat.map(store.name) ?? "Chats", at: strip.anchor(under: slot))
         Task {
             try? await Task.sleep(for: .milliseconds(80))  // the pill holds a beat, then grows into the panel
             panel.setFrame(Self.padded(start), display: false)
@@ -150,9 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return box
     }
 
-    /// The panel's glass at rest: centred under the chat's slot, kept on screen.
-    private func frame(for chat: Chat?) -> NSRect {
-        let at = strip.anchor(under: chat.flatMap(strip.slot) ?? 0)
+    /// The panel's glass at rest: centred under a strip slot, kept on screen.
+    private func frame(under slot: Int) -> NSRect {
+        let at = strip.anchor(under: slot)
         let screen = strip.item.button?.window?.screen?.visibleFrame ?? .infinite
         let x = min(max(at.x - Self.width / 2, screen.minX + 8), screen.maxX - Self.width - 8)
         return NSRect(x: x, y: at.y - Self.height, width: Self.width, height: Self.height)

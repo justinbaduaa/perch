@@ -24,11 +24,13 @@ Drag Perch to Applications, open it, then grant:
 ## Interactions
 
 - The menu bar shows the 5 people you talked to last, whoever sent the last message. A new message, in or out, moves that chat to the front.
-- Avatars overlap in the menu bar. The one under the pointer parts from its neighbours; "•••" at the end lists the other chats.
+- Avatars overlap in the menu bar. The one under the pointer parts from its neighbours; nothing else in the menu bar moves.
+- "•••" opens every chat behind a search field. Return opens the top match.
 - Clicking an avatar shows its name in a pill, which grows into the panel. Clicking another one slides the panel over; clicking the same one, or anywhere else, closes it.
 - With the panel open, hovering another avatar changes the composer to "Switch to …".
 - A message you send shows at once, dimmed, and settles when Messages writes it. A failed send puts your text back.
-- The waveform button records a voice note; the record button records the main display with your voice. Send stops and sends it, × throws it away. Screen recordings are re-encoded as HEVC so they fit iMessage's size limit.
+- The waveform button records a voice note: Send stops and sends it, × throws it away.
+- The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.
 - Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Right-click a message for Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
