@@ -21,7 +21,7 @@ import Testing
         CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT);
         CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
-          date INTEGER, is_from_me INTEGER, is_read INTEGER DEFAULT 1, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
+          date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
           associated_message_guid TEXT, associated_message_emoji TEXT);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
         CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT);
@@ -41,7 +41,6 @@ import Testing
           (7, 'G', NULL, NULL, 1, 7000, 0, 1, 0, NULL),
           (8, 'D', NULL, NULL, 1, 8000, 0, 0, 0, NULL),
           (9, 'Z', 'old group', NULL, 1, 500, 0, 0, 0, NULL);
-        UPDATE message SET is_read = 0 WHERE ROWID IN (3, 4);  -- an unread message, and an unread tapback that doesn't count
         INSERT INTO chat_message_join SELECT 1, ROWID, date FROM message WHERE ROWID < 9;
         INSERT INTO chat_message_join VALUES (2, 9, 500);
         INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg'), (2, '/nope/gone.jpg', 'image/jpeg');
@@ -59,7 +58,6 @@ import Testing
     #expect(rows.map(\.reactions) == [["😂"], [], []])  // B's ❤️ was removed by the 3000 row
     #expect(rows[1].fromMe && rows[0].sender == "+15551234567")
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
-    #expect(try messages.unread() == [1: 3])
 
     #expect(ContactBook.key("+1 (555) 123-4567") == ContactBook.key("5551234567"))
 }

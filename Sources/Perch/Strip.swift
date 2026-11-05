@@ -126,10 +126,14 @@ final class AvatarStrip {
         let rim = dark ? Color.black.opacity(0.45) : Color.white.opacity(0.85)  // reads as a cut between stacked avatars
         let shape = RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
         let xs = xs, open = openSlot, more = moreSlot, size = Self.size
+        let recording = bar.firstIndex { $0.id == store.recorder.chatID }
         let strip = ZStack(alignment: .leading) {
             ForEach(Array(bar.enumerated()), id: \.element.id) { i, chat in
                 Avatar(image: store.photo(chat), name: store.name(chat), size: size, cornerRadius: Self.corner)
-                    .overlay { shape.strokeBorder(i == open ? Color.primary : rim, lineWidth: i == open ? 1.5 : 1) }
+                    .overlay {
+                        shape.strokeBorder(i == recording ? .red : i == open ? Color.primary : rim,
+                                           lineWidth: i == recording || i == open ? 1.5 : 1)
+                    }
                     .offset(x: xs[i])
                     .zIndex(Double(i))
             }

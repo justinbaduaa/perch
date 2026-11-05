@@ -47,10 +47,6 @@ struct Pending: Identifiable {
 
     @ObservationIgnored private var db: MessagesDB?
     @ObservationIgnored private var lastRowID: Int64 = -1
-    @ObservationIgnored private var pins: [String] = []
-    /// Chat id to its newest unread incoming ROWID, and to the newest one already shown in the panel.
-    @ObservationIgnored private var unread: [Int64: Int64] = [:]
-    @ObservationIgnored private var seen: [Int64: Int64] = [:]
     @ObservationIgnored private var nextPendingID: Int64 = -1
 
     func start() {
@@ -70,19 +66,11 @@ struct Pending: Identifiable {
         }
     }
 
-    /// Chats with new messages first, newest first, then Messages' pins (or the most recent chats).
+    /// The people you talked to last, whoever sent the last message. A chat you're recording for stays first,
+    /// so the recording is one click away after the panel closes.
     var barChats: [Chat] {
-        let pinned = pins.compactMap { pin in chats.first { $0.identifier == pin || $0.guid == pin } }
-        var bar = chats.filter { (unread[$0.id] ?? 0) > (seen[$0.id] ?? 0) }
-        for chat in pinned.isEmpty ? chats : pinned where !bar.contains(where: { $0.id == chat.id }) { bar.append(chat) }
-        return Array(bar.prefix(5))
-    }
-
-    /// Reading in the panel can't mark chat.db read, so remember what was shown: the chat leaves the front of the
-    /// bar until something newer arrives.
-    func markSeen(_ chat: Chat?) {
-        guard let chat, let newest = unread[chat.id] else { return }
-        seen[chat.id] = newest
+        let recording = chats.first { $0.id == recorder.chatID }
+        return Array(([recording].compactMap(\.self) + chats.filter { $0.id != recording?.id }).prefix(5))
     }
 
     func messages(for chat: Chat) -> [Message] { (try? db?.messages(chat: chat.id)) ?? [] }
@@ -134,21 +122,14 @@ struct Pending: Identifiable {
 
     private func poll() {
         do {
-            if db == nil {
-                db = try MessagesDB(path: MessagesDB.path)
-                pins = MessagesDB.pinnedIdentifiers()
-            }
+            if db == nil { db = try MessagesDB(path: MessagesDB.path) }
             let max = try db!.maxRowID()
-            let unreadNow = try db!.unread()  // re-read every poll: reading in Messages changes it without a new row
             needsAccess = false
             readError = nil
-            guard max != lastRowID || unreadNow != unread else { return }
-            unread = unreadNow
-            if max != lastRowID {
-                lastRowID = max
-                chats = try db!.chats()
-                revision += 1
-            }
+            guard max != lastRowID else { return }
+            lastRowID = max
+            chats = try db!.chats()
+            revision += 1
         } catch {
             db = nil
             needsAccess = !FileManager.default.isReadableFile(atPath: MessagesDB.path)

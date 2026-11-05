@@ -1,6 +1,6 @@
 # Perch
 
-iMessage in your menu bar. Your pinned Messages conversations sit in the menu bar as avatars. Click one and a glass panel grows out of the menu bar with that thread: read it, type a note, drop files in, drag photos out. The expand button opens the thread in Messages. The UI follows [Hoy](https://gethoy.app), with iMessage as the transport instead of CloudKit.
+iMessage in your menu bar. The people you talked to last sit in the menu bar as avatars. Click one and a glass panel grows out of the menu bar with that thread: read it, type a note, drop files in, drag photos out. The expand button opens the thread in Messages. The UI follows [Hoy](https://gethoy.app), with iMessage as the transport instead of CloudKit.
 
 Requires macOS 26 or later.
 
@@ -13,7 +13,7 @@ open build/Perch.dmg
 
 Drag Perch to Applications, open it, then grant:
 
-- **Full Disk Access**: System Settings > Privacy & Security > Full Disk Access, add Perch, relaunch. Perch reads `~/Library/Messages/chat.db` and your Messages pins.
+- **Full Disk Access**: System Settings > Privacy & Security > Full Disk Access, add Perch, relaunch. Perch reads `~/Library/Messages/chat.db`.
 - **Contacts**: prompted on first launch, for names and photos.
 - **Automation > Messages**: prompted on your first send.
 - **Notifications**: prompted the first time you use Remind me.
@@ -23,7 +23,7 @@ Drag Perch to Applications, open it, then grant:
 
 ## Interactions
 
-- Chats with new messages come first in the menu bar, then your Messages pins. A chat leaves the front once you read it, in Messages or in the panel.
+- The menu bar shows the 5 people you talked to last, whoever sent the last message. A new message, in or out, moves that chat to the front.
 - Avatars overlap in the menu bar. The one under the pointer parts from its neighbours; "•••" at the end lists the other chats.
 - Clicking an avatar shows its name in a pill, which grows into the panel. Clicking another one slides the panel over; clicking the same one, or anywhere else, closes it.
 - With the panel open, hovering another avatar changes the composer to "Switch to …".

@@ -93,7 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func show(_ chat: Chat?) {
         NSApp.activate()
         if store.panelShown {
-            store.markSeen(store.panelChat)
             withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
             strip.update()
             let target = frame(for: chat)
@@ -114,15 +113,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let start = showPill(chat.map(store.name) ?? "Perch", at: strip.anchor(under: chat.flatMap(strip.slot) ?? 0))
         Task {
-            try? await Task.sleep(for: .milliseconds(140))  // the pill holds a beat, then grows into the panel
+            try? await Task.sleep(for: .milliseconds(80))  // the pill holds a beat, then grows into the panel
             panel.setFrame(start, display: false)
             panel.alphaValue = 0
             panel.makeKeyAndOrderFront(nil)
-            withAnimation(.smooth(duration: 0.45)) { store.panelShown = true }
+            withAnimation(.smooth(duration: 0.3)) { store.panelShown = true }
             strip.update()
             await NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.45
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.2, 1)
+                ctx.duration = 0.28  // opened dozens of times a day: keep it under 300ms, strong ease-out
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
                 panel.animator().setFrame(target, display: true)
                 panel.animator().alphaValue = 1
                 pill.animator().alphaValue = 0
@@ -158,19 +157,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Blurs the content out while the window shrinks back toward the menu bar.
     private func hidePanel() {
         guard store.panelShown else { return }
-        store.markSeen(store.panelChat)
         nowPlaying?.stop()
-        withAnimation(.smooth(duration: 0.2)) { store.panelShown = false }
+        withAnimation(.smooth(duration: 0.18)) { store.panelShown = false }
         strip.update()
         let f = panel.frame
         let end = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? f : NSRect(x: f.midX - 60, y: f.maxY - 30, width: 120, height: 30)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.22
+            ctx.duration = 0.18
             panel.animator().setFrame(end, display: true)
             panel.animator().alphaValue = 0
         }
         Task {
-            try? await Task.sleep(for: .milliseconds(240))
+            try? await Task.sleep(for: .milliseconds(200))
             if !store.panelShown { panel.orderOut(nil); pill.orderOut(nil) }  // unless reopened mid-animation
         }
     }

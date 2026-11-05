@@ -373,7 +373,7 @@ struct Composer: View {
                         .font(.caption).monospacedDigit()
                     }
                     Spacer()
-                    tool("xmark", "Discard recording") { recorder.discard() }
+                    tool("xmark", "Discard recording") { recorder.discard(); store.onChange() }
                     sendButton("Send", action: finishRecording).disabled(recorder.finishing)
                 } else {
                     Group {
@@ -416,6 +416,7 @@ struct Composer: View {
             do {
                 try await store.recorder.start(kind, for: chat)
                 store.sendError = nil
+                store.onChange()  // the strip rings the chat being recorded
             } catch {
                 store.sendError = error.localizedDescription
             }
@@ -430,6 +431,7 @@ struct Composer: View {
             } catch {
                 store.sendError = error.localizedDescription
             }
+            store.onChange()
         }
     }
 
