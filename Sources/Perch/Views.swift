@@ -275,6 +275,10 @@ struct Thumbnail: View {
     }
 }
 
+/// The voice note playing now. Only one plays at a time, and closing the panel stops it.
+var nowPlaying: AVAudioPlayer?
+
+/// A voice note: click anywhere on it to play or pause.
 struct AudioChip: View {
     let url: URL
     @State private var player: AVAudioPlayer?
@@ -282,20 +286,23 @@ struct AudioChip: View {
     @State private var bars: [CGFloat] = []
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button(action: toggle) { Image(systemName: playing ? "pause.fill" : "play.fill") }
-                .buttonStyle(.plain)
-                .accessibilityLabel(playing ? "Pause" : "Play")
-            Text(Duration.seconds(player?.duration ?? 0).formatted(.time(pattern: .minuteSecond)))
-                .font(.caption).monospacedDigit()
-            HStack(spacing: 2) {
-                ForEach(bars.indices, id: \.self) { Capsule().frame(width: 2, height: max(2, bars[$0] * 16)) }
+        Button(action: toggle) {
+            HStack(spacing: 8) {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                Text(Duration.seconds(player?.duration ?? 0).formatted(.time(pattern: .minuteSecond)))
+                    .font(.caption).monospacedDigit()
+                HStack(spacing: 2) {
+                    ForEach(bars.indices, id: \.self) { Capsule().frame(width: 2, height: max(2, bars[$0] * 16)) }
+                }
+                .frame(height: 16)
+                .foregroundStyle(.secondary)
             }
-            .frame(height: 16)
-            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.quaternary, in: .capsule)
+            .contentShape(.capsule)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.quaternary, in: .capsule)
+        .buttonStyle(.plain)
+        .accessibilityLabel(playing ? "Pause voice note" : "Play voice note")
         .task {
             player = try? AVAudioPlayer(contentsOf: url)
             bars = await Task.detached { [url] in waveform(url) }.value
@@ -305,6 +312,8 @@ struct AudioChip: View {
     private func toggle() {
         guard let player else { return }
         if player.isPlaying { player.pause(); playing = false; return }
+        nowPlaying?.stop()
+        nowPlaying = player
         player.play()
         playing = true
         Task {
@@ -352,16 +361,31 @@ struct Composer: View {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 14) {
-                Button(action: attach) { Image(systemName: "paperclip") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Attach").accessibilityLabel("Attach")
-                Spacer()
-                Button(action: sendText) {
-                    Text("Drop ↵").font(.caption.weight(.medium))
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(.quaternary, in: .capsule)
+                let recorder = store.recorder
+                if recorder.kind != nil, recorder.chatID == chat.id {
+                    Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(.red)
+                    if recorder.finishing {
+                        Text("Preparing…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        TimelineView(.periodic(from: recorder.started, by: 1)) { context in
+                            Text(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))
+                        }
+                        .font(.caption).monospacedDigit()
+                    }
+                    Spacer()
+                    tool("xmark", "Discard recording") { recorder.discard() }
+                    sendButton("Send", action: finishRecording).disabled(recorder.finishing)
+                } else {
+                    Group {
+                        tool("waveform", "Record voice") { record(.voice) }
+                        tool("record.circle", "Record screen") { record(.screen) }
+                    }
+                    .disabled(recorder.kind != nil)  // already recording for another chat
+                    tool("paperclip", "Attach", action: attach)
+                    Spacer()
+                    sendButton("Send ↵", action: sendText)
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .buttonStyle(.plain)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(12)
@@ -385,6 +409,42 @@ struct Composer: View {
         guard panel.runModal() == .OK else { return }
         let urls = panel.urls
         Task { for url in urls { await store.send(file: url, to: chat) } }
+    }
+
+    private func record(_ kind: Recorder.Kind) {
+        Task {
+            do {
+                try await store.recorder.start(kind, for: chat)
+                store.sendError = nil
+            } catch {
+                store.sendError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Stops the recording and sends it.
+    private func finishRecording() {
+        Task {
+            do {
+                if let file = try await store.recorder.stop() { await store.send(file: file, to: chat) }
+            } catch {
+                store.sendError = error.localizedDescription
+            }
+        }
+    }
+
+    private func tool(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(.plain).foregroundStyle(.secondary).help(label).accessibilityLabel(label)
+    }
+
+    private func sendButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.caption.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(.quaternary, in: .capsule)
+        }
+        .buttonStyle(.plain)
     }
 }
 

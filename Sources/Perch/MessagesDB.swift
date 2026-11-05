@@ -128,6 +128,17 @@ final class MessagesDB {
         return rows.filter { !$0.text.isEmpty || !$0.attachments.isEmpty }
     }
 
+    /// Chats with incoming messages Messages hasn't marked read, mapped to the newest such ROWID.
+    func unread() throws -> [Int64: Int64] {
+        var out: [Int64: Int64] = [:]
+        try query("""
+            SELECT j.chat_id, MAX(m.ROWID) FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID
+            WHERE m.is_read = 0 AND m.is_from_me = 0 AND m.item_type = 0 AND m.associated_message_type = 0
+            GROUP BY j.chat_id
+            """) { out[$0.int(0)] = $0.int(1) }
+        return out
+    }
+
     /// Chat identifiers pinned in Messages, in pin order. Empty when the format is not what we expect.
     static func pinnedIdentifiers() -> [String] {
         let url = URL.homeDirectory.appending(path: "Library/Preferences/com.apple.messages.pinning.plist")

@@ -20,6 +20,8 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Perch shows names and photos for your conversations.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Perch records voice notes, and your voice over screen recordings.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Perch sends your messages through Messages.</string>
 </dict>

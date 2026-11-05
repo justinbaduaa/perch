@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func show(_ chat: Chat?) {
         NSApp.activate()
         if store.panelShown {
+            store.markSeen(store.panelChat)
             withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
             strip.update()
             let target = frame(for: chat)
@@ -157,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Blurs the content out while the window shrinks back toward the menu bar.
     private func hidePanel() {
         guard store.panelShown else { return }
+        store.markSeen(store.panelChat)
+        nowPlaying?.stop()
         withAnimation(.smooth(duration: 0.2)) { store.panelShown = false }
         strip.update()
         let f = panel.frame
