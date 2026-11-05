@@ -7,10 +7,10 @@ final class Preview: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate 
 
     /// Media in the open conversation, oldest first.
     var urls: [URL] = []
-    /// Where each thumbnail sits, in SwiftUI global space of `window` (top-left origin).
+    /// Where each thumbnail sits in the panel's "panel" coordinate space, which is `host`'s bounds.
     var frames: [URL: CGRect] = [:]
     var images: [URL: NSImage] = [:]
-    weak var window: NSWindow?
+    weak var host: NSView?
     private var start = 0
 
     func toggle(_ url: URL) {
@@ -32,8 +32,8 @@ final class Preview: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! { urls[index] as NSURL }
 
     func previewPanel(_ panel: QLPreviewPanel!, sourceFrameOnScreenFor item: (any QLPreviewItem)!) -> NSRect {
-        guard let window, let url = item.previewItemURL, let r = frames[url] else { return .zero }
-        return NSRect(x: window.frame.minX + r.minX, y: window.frame.maxY - r.maxY, width: r.width, height: r.height)
+        guard let host, let window = host.window, let url = item.previewItemURL, let r = frames[url] else { return .zero }
+        return window.convertToScreen(host.convert(r, to: nil))  // the hosting view is flipped, like SwiftUI
     }
 
     func previewPanel(_ panel: QLPreviewPanel!, transitionImageFor item: (any QLPreviewItem)!,

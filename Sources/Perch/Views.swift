@@ -23,6 +23,7 @@ struct PanelRoot: View {
             }
         }
         .frame(width: 340, height: 540)
+        .coordinateSpace(.named("panel"))  // thumbnails report here, for Quick Look's zoom
         // The window grows from a pill while this blurs in, so pin the content to the top and clip it.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .clipped()
@@ -265,7 +266,7 @@ struct Thumbnail: View {
         .onHover { hovering = $0 }
         .onTapGesture { Preview.shared.toggle(item.url) }
         .draggable(item.url)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Preview.shared.frames[item.url] = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { Preview.shared.frames[item.url] = $0 }
         .task(id: item.url) {
             let request = QLThumbnailGenerator.Request(fileAt: item.url, size: CGSize(width: side, height: side),
                                                        scale: 2, representationTypes: .thumbnail)

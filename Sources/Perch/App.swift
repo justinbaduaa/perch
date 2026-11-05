@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pill = AppDelegate.floatingPanel()
     private var mouseDownAt = NSPoint.zero
     private static let width: CGFloat = 340, height: CGFloat = 540
+    /// Clear room around the glass for its own shadow, which the window edge would otherwise cut square.
+    private static let margin: CGFloat = 24
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -103,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let target = frame(for: chat)
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.3
-                panel.animator().setFrame(target, display: true)
+                panel.animator().setFrame(Self.padded(target), display: true)
             }
             return panel.makeKey()
         }
@@ -112,14 +114,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             store.panelShown = true
             strip.update()
-            panel.setFrame(target, display: true)
+            panel.setFrame(Self.padded(target), display: true)
             panel.alphaValue = 1
             return panel.makeKeyAndOrderFront(nil)
         }
         let start = showPill(chat.map(store.name) ?? "Perch", at: strip.anchor(under: chat.flatMap(strip.slot) ?? 0))
         Task {
             try? await Task.sleep(for: .milliseconds(80))  // the pill holds a beat, then grows into the panel
-            panel.setFrame(start, display: false)
+            panel.setFrame(Self.padded(start), display: false)
             panel.alphaValue = 0
             panel.makeKeyAndOrderFront(nil)
             withAnimation(.smooth(duration: 0.3)) { store.panelShown = true }
@@ -127,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.28  // opened dozens of times a day: keep it under 300ms, strong ease-out
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
-                panel.animator().setFrame(target, display: true)
+                panel.animator().setFrame(Self.padded(target), display: true)
                 panel.animator().alphaValue = 1
                 pill.animator().alphaValue = 0
             }
@@ -135,7 +137,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The panel's resting frame: centred under the chat's slot, kept on screen.
+    private static func padded(_ glass: NSRect) -> NSRect { glass.insetBy(dx: -margin, dy: -margin) }
+
+    /// `content` on glass, inset in a clear view so the glass's shadow has room inside the window.
+    private static func glassBox(_ content: NSView, size: NSSize, radius: CGFloat) -> NSView {
+        let box = NSView(frame: padded(NSRect(origin: .zero, size: size)).offsetBy(dx: margin, dy: margin))
+        let glass = NSGlassEffectView(frame: NSRect(x: margin, y: margin, width: size.width, height: size.height))
+        glass.cornerRadius = radius
+        glass.autoresizingMask = [.width, .height]
+        glass.contentView = content
+        box.addSubview(glass)
+        return box
+    }
+
+    /// The panel's glass at rest: centred under the chat's slot, kept on screen.
     private func frame(for chat: Chat?) -> NSRect {
         let at = strip.anchor(under: chat.flatMap(strip.slot) ?? 0)
         let screen = strip.item.button?.window?.screen?.visibleFrame ?? .infinite
@@ -148,12 +163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let label = NSHostingView(rootView: Text(name).font(.callout.weight(.semibold)).lineLimit(1)
             .padding(.horizontal, 12).padding(.vertical, 6).fixedSize())
         let size = label.fittingSize
-        let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
-        glass.cornerRadius = size.height / 2
-        glass.contentView = label
-        pill.contentView = glass
+        pill.contentView = Self.glassBox(label, size: size, radius: size.height / 2)
         let frame = NSRect(x: at.x - size.width / 2, y: at.y - size.height, width: size.width, height: size.height)
-        pill.setFrame(frame, display: true)
+        pill.setFrame(Self.padded(frame), display: true)
         pill.alphaValue = 1
         pill.orderFront(nil)
         return frame
@@ -165,11 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nowPlaying?.stop()
         withAnimation(.smooth(duration: 0.18)) { store.panelShown = false }
         strip.update()
-        let f = panel.frame
+        let f = panel.frame.insetBy(dx: Self.margin, dy: Self.margin)
         let end = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? f : NSRect(x: f.midX - 60, y: f.maxY - 30, width: 120, height: 30)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
-            panel.animator().setFrame(end, display: true)
+            panel.animator().setFrame(Self.padded(end), display: true)
             panel.animator().alphaValue = 0
         }
         Task {
@@ -193,19 +205,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openInMessages: { [unowned self] in openInMessages() },
             close: { [unowned self] in hidePanel() }))
         host.sizingOptions = []
-        // The glass is the window's content, so the window takes its rounded shape. The glass pins its contentView
-        // edge to edge, so that is a bare container with no size of its own; the panel inside keeps full size,
-        // pinned top-centre, and is revealed as the window grows out of the pill.
+        // The glass pins its contentView edge to edge, so that is a bare container with no size of its own; the
+        // panel inside keeps full size, pinned top-centre, and is revealed as the window grows out of the pill.
         let bounds = NSRect(x: 0, y: 0, width: Self.width, height: Self.height)
-        let glass = NSGlassEffectView(frame: bounds)
-        glass.cornerRadius = 26
         let container = NSView(frame: bounds)
         host.frame = bounds
         host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
         container.addSubview(host)
-        glass.contentView = container
-        panel.contentView = glass
-        Preview.shared.window = panel
+        panel.contentView = Self.glassBox(container, size: bounds.size, radius: 26)
+        Preview.shared.host = host
         return panel
     }
 
