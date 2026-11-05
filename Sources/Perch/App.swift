@@ -182,7 +182,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makePanel() -> NSPanel {
         let panel = Self.floatingPanel()
-        panel.hasShadow = true
         let host = NSHostingView(rootView: PanelRoot(
             store: store,
             openInMessages: { [unowned self] in openInMessages() },
@@ -210,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                  styleMask: [.borderless], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        panel.hasShadow = false  // the window shadow and border follow the square frame, not the glass's rounded shape
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
