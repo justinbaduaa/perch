@@ -35,6 +35,8 @@ struct Pending: Identifiable {
     private(set) var readError: String?
     private(set) var pending: [Pending] = []
     var sendError: String?
+    /// Files waiting in each chat's message box for Send.
+    private(set) var drafts: [Int64: [URL]] = [:]
     /// My tapback on a message while it's on its way (nil value: being removed), shown until chat.db catches up.
     private(set) var tapbacks: [String: String?] = [:]
     let recorder = Recorder()
@@ -56,8 +58,11 @@ struct Pending: Identifiable {
 
     func start() {
         recorder.onScreenEnded = { [unowned self] id in
-            onChange()
-            if let chat = chats.first(where: { $0.id == id }) { showPanel(chat) }
+            Task {
+                if let file = try? await recorder.stop() { stage([file], for: id) }  // a finished capture waits for Send
+                onChange()
+                if let chat = chats.first(where: { $0.id == id }) { showPanel(chat) }
+            }
         }
         poll()
         Task {
@@ -114,6 +119,24 @@ struct Pending: Identifiable {
             withAnimation(.smooth) { pending.removeAll { $0.id == p.id } }
             return false
         }
+    }
+
+    func stage(_ files: [URL], for chatID: Int64) {
+        withAnimation(.smooth) { drafts[chatID, default: []] += files }
+    }
+
+    func unstage(_ file: URL, from chatID: Int64) {
+        withAnimation(.smooth) { drafts[chatID]?.removeAll { $0 == file } }
+    }
+
+    /// Sends the staged files, then the text, as Messages does. A file that fails goes back in the box.
+    /// Returns false if the text failed, so the caller can put it back.
+    func sendDraft(text: String, to chat: Chat) async -> Bool {
+        let files = drafts.removeValue(forKey: chat.id) ?? []
+        for file in files {
+            if await !send(file: file, to: chat) { stage([file], for: chat.id) }
+        }
+        return text.isEmpty ? true : await send(text, to: chat)
     }
 
     /// Picking the tapback you already gave takes it off, as in Messages; any other replaces it.

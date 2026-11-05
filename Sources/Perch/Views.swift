@@ -144,7 +144,7 @@ struct ConversationView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            Task { for url in urls { await store.send(file: url, to: chat) } }
+            store.stage(urls, for: chat.id)  // into the message box; Send sends
             return true
         } isTargeted: { dropping = $0 }
         .task(id: "\(chat.id)-\(store.revision)") {
@@ -252,7 +252,7 @@ struct MessageRow: View {
         let urls = message.attachments.map(\.url)
         ControlGroup {
             ForEach(Tapbacks.all, id: \.key) { tapback in
-                Button(tapback.emoji) { store.react(tapback.emoji, to: message, in: chat) }
+                Button { store.react(tapback.emoji, to: message, in: chat) } label: { Image(nsImage: emojiImage(tapback.emoji)) }
                     .accessibilityLabel(tapback.key)
             }
         }
@@ -425,22 +425,29 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let files = store.drafts[chat.id], !files.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(files, id: \.self) { file in
+                            DraftChip(url: file) { store.unstage(file, from: chat.id) }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
             TextField(placeholder, text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
-                .onSubmit(sendText)
+                .onSubmit(sendAll)
             if let error = store.sendError {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 14) {
                 let recorder = store.recorder
                 if recorder.kind != nil, recorder.chatID == chat.id {
-                    Image(systemName: "circle.fill").font(.system(size: 8))
-                        .foregroundStyle(recorder.ready == nil ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(.red)
                     Group {
-                        if let ready = recorder.ready {
-                            Text(ready.pathExtension == "png" ? "Screenshot" : "Screen recording")
-                        } else if recorder.finishing {
+                        if recorder.finishing {
                             Text("Preparing…")
                         } else if recorder.kind == .screen {
                             Text(recorder.stopHint)
@@ -454,8 +461,8 @@ struct Composer: View {
                     .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     tool("xmark", "Discard recording") { recorder.discard(); store.onChange() }
-                    if recorder.kind == .voice || recorder.ready != nil {
-                        sendButton("Send", action: finishRecording).disabled(recorder.finishing)
+                    if recorder.kind == .voice {
+                        sendButton("Send", action: finishRecording)
                     }
                 } else {
                     Group {
@@ -465,8 +472,8 @@ struct Composer: View {
                     .disabled(recorder.kind != nil)  // already recording for another chat
                     tool("paperclip", "Attach", action: attach)
                     Spacer()
-                    sendButton("Send ↵", action: sendText)
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    sendButton("Send ↵", action: sendAll)
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.drafts[chat.id, default: []].isEmpty)
                 }
             }
         }
@@ -475,13 +482,14 @@ struct Composer: View {
         .padding(10)
     }
 
-    /// Clears the field at once; a failed send puts the text back so nothing typed is lost.
-    private func sendText() {
+    /// Sends what's in the box: staged files, then the text. Clears the field at once; a failed send puts the
+    /// text back so nothing typed is lost.
+    private func sendAll() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !store.drafts[chat.id, default: []].isEmpty else { return }
         draft = ""
         Task {
-            if await !store.send(text, to: chat), draft.isEmpty { draft = text }
+            if await !store.sendDraft(text: text, to: chat), draft.isEmpty { draft = text }
         }
     }
 
@@ -489,8 +497,7 @@ struct Composer: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
-        let urls = panel.urls
-        Task { for url in urls { await store.send(file: url, to: chat) } }
+        store.stage(panel.urls, for: chat.id)
     }
 
     private func record(_ kind: Recorder.Kind) {
@@ -530,6 +537,43 @@ struct Composer: View {
                 .background(.quaternary, in: .capsule)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A file waiting in the message box: its thumbnail, and an × to take it out.
+struct DraftChip: View {
+    let url: URL
+    let remove: () -> Void
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image { Image(nsImage: image).resizable().scaledToFill() } else { Rectangle().fill(.quaternary) }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(.rect(cornerRadius: 10, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .buttonStyle(.plain).padding(3)
+            .accessibilityLabel("Remove \(url.lastPathComponent)")
+        }
+        .help(url.lastPathComponent)
+        .task(id: url) {
+            let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 52, height: 52), scale: 2, representationTypes: .thumbnail)
+            image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage
+        }
+    }
+}
+
+/// Menu palettes draw images only, so a tapback's emoji is drawn into one.
+private func emojiImage(_ emoji: String) -> NSImage {
+    NSImage(size: NSSize(width: 24, height: 24), flipped: false) { rect in
+        let text = NSAttributedString(string: emoji, attributes: [.font: NSFont.systemFont(ofSize: 18)])
+        let size = text.size()
+        text.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2))
+        return true
     }
 }
 
