@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import SQLite3
 import Testing
 @testable import Perch
@@ -115,4 +115,28 @@ import Testing
     let video = try capture("media_new", "CleanShot new.mp4")
     let found = Recorder.capture(in: media, since: since)
     #expect(found?.resolvingSymlinksInPath() == video.resolvingSymlinksInPath(), "found \(String(describing: found)) want \(video)")
+}
+
+/// ⌘V takes copied files, and a bare picture as a PNG, but leaves text to the text field.
+@Test func pastesFilesAndPicturesButNotText() throws {
+    let pb = NSPasteboard(name: .init("perch-test-\(UUID().uuidString)"))
+    defer { pb.releaseGlobally() }
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let image = NSImage(size: NSSize(width: 4, height: 4), flipped: false) { NSColor.red.setFill(); $0.fill(); return true }
+    let file = dir.appending(path: "photo.png")
+    try NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: file)
+
+    Clipboard.copy([file], to: pb)  // Perch's Copy: the file, and the picture for apps that want one
+    #expect(Clipboard.pastedFiles(from: pb)?.map(\.lastPathComponent) == ["photo.png"])
+    #expect(pb.data(forType: .png) != nil)
+
+    pb.clearContents()
+    pb.writeObjects([image])  // a screenshot copied to the clipboard
+    #expect(Clipboard.pastedFiles(from: pb)?.map(\.pathExtension) == ["png"])
+
+    pb.clearContents()
+    pb.setString("hello", forType: .string)
+    #expect(Clipboard.pastedFiles(from: pb) == nil)
 }

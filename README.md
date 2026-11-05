@@ -31,7 +31,7 @@ Drag Perch to Applications, open it, then grant:
 - Clicking an avatar shows its name in a pill, which grows into the panel. Clicking another one slides the panel over; clicking the same one, or anywhere else, closes it.
 - With the panel open, hovering another avatar changes the composer to "Switch to …".
 - A message you send shows at once, dimmed, and settles when Messages writes it. A failed send puts your text back.
-- Dropped files, the paperclip and finished screen recordings wait in the message box with an × each; Send sends them, then your text.
+- Dropped files, pasted files and pictures (⌘V), the paperclip and finished screen recordings wait in the message box with an × each; Send sends them, then your text.
 - The waveform button records a voice note, with a live waveform: Send stops and sends it, × throws it away.
 - The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.

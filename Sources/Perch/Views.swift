@@ -396,9 +396,12 @@ struct MessageRow: View {
         .controlGroupStyle(.palette)
         Button("Reply", systemImage: "arrowshape.turn.up.left", action: reply)
         Button("Copy", systemImage: "doc.on.doc") {
-            NSPasteboard.general.clearContents()
-            if urls.isEmpty { NSPasteboard.general.setString(message.text, forType: .string) }
-            else { NSPasteboard.general.writeObjects(urls as [NSURL]) }
+            if urls.isEmpty {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.text, forType: .string)
+            } else {
+                Clipboard.copy(urls)
+            }
         }
         if urls.isEmpty { ShareLink(item: message.text) } else { ShareLink(items: urls) }
         if !urls.isEmpty {
@@ -557,6 +560,7 @@ struct Composer: View {
     @Binding var replying: Message?
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @State private var pasteMonitor: Any?
 
     /// Hovering another avatar in the menu bar previews where a click goes.
     private var placeholder: String {
@@ -646,6 +650,18 @@ struct Composer: View {
         .padding(10)
         .animation(.smooth(duration: 0.2), value: replying?.guid)
         .onChange(of: replying?.guid) { if replying != nil { focused = true } }
+        // ⌘V with files or a picture on the clipboard puts them in the box, as a drop does. Text pastes as usual.
+        .onAppear {
+            pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.window is KeyablePanel, store.panelShown,
+                      event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                      event.charactersIgnoringModifiers == "v",
+                      let files = Clipboard.pastedFiles() else { return event }
+                store.stage(files, for: chat.id)
+                return nil
+            }
+        }
+        .onDisappear { pasteMonitor.map(NSEvent.removeMonitor) }
     }
 
     /// Sends what's in the box: staged files, then the text. Clears the field at once; a failed send puts the
