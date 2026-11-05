@@ -35,6 +35,8 @@ struct Pending: Identifiable {
     private(set) var readError: String?
     private(set) var pending: [Pending] = []
     var sendError: String?
+    /// My tapback on a message while it's on its way (nil value: being removed), shown until chat.db catches up.
+    private(set) var tapbacks: [String: String?] = [:]
     let recorder = Recorder()
     /// Message guid to reminder time. The system keeps the reminders, as pending notifications keyed by guid.
     private(set) var reminders: [String: Date] = [:]
@@ -111,6 +113,22 @@ struct Pending: Identifiable {
             sendError = error.localizedDescription
             withAnimation(.smooth) { pending.removeAll { $0.id == p.id } }
             return false
+        }
+    }
+
+    /// Picking the tapback you already gave takes it off, as in Messages; any other replaces it.
+    func react(_ emoji: String, to message: Message, in chat: Chat) {
+        let on = message.mine != emoji
+        withAnimation(.smooth) { tapbacks[message.guid] = .some(on ? emoji : nil) }
+        Task {
+            do {
+                try await Tapbacks.set(emoji, on: on, message: message.guid, chat: chat.guid)
+                sendError = nil
+                try? await Task.sleep(for: .seconds(6))  // chat.db has the row by now
+            } catch {
+                sendError = error.localizedDescription
+            }
+            withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) }
         }
     }
 

@@ -3,7 +3,8 @@
 # Full Disk Access and Automation grants across rebuilds (ad-hoc signing resets them).
 set -e
 cd "$(dirname "$0")"
-swift build -c release
+# platform-imessage keeps only its Node bridge binaries in Git LFS; Perch doesn't need them.
+GIT_LFS_SKIP_SMUDGE=1 swift build -c release
 APP=build/Perch.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"

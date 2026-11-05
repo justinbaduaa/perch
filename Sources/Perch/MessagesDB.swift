@@ -27,6 +27,8 @@ struct Message: Identifiable {
     let text: String
     var attachments: [Attachment] = []
     var reactions: [String] = []
+    /// My own tapback on it, if any.
+    var mine: String?
 }
 
 struct DBError: Error { let message: String }
@@ -123,7 +125,10 @@ final class MessagesDB {
             default: break
             }
         }
-        for i in rows.indices { rows[i].reactions = current[rows[i].guid]?.values.sorted() ?? [] }
+        for i in rows.indices {
+            rows[i].reactions = current[rows[i].guid]?.values.sorted() ?? []
+            rows[i].mine = current[rows[i].guid]?["me"]
+        }
 
         return rows.filter { !$0.text.isEmpty || !$0.attachments.isEmpty }
     }

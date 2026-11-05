@@ -212,8 +212,8 @@ struct MessageRow: View {
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
                 }
-                if !message.reactions.isEmpty {
-                    Text(message.reactions.joined()).font(.caption)
+                if !reactions.isEmpty {
+                    Text(reactions.joined()).font(.caption)
                 }
                 if let when = store.reminders[message.guid], when > .now {
                     Label("Reminder \(inline.string(from: when))", systemImage: "bell.fill")
@@ -239,8 +239,24 @@ struct MessageRow: View {
         .frame(width: 22, height: 22)
     }
 
+    /// chat.db's tapbacks, with mine swapped for the one on its way, if any.
+    private var reactions: [String] {
+        var shown = message.reactions
+        guard let override = store.tapbacks[message.guid] else { return shown }
+        if let old = message.mine, let i = shown.firstIndex(of: old) { shown.remove(at: i) }
+        if let new = override { shown.append(new) }
+        return shown
+    }
+
     @ViewBuilder private var menu: some View {
         let urls = message.attachments.map(\.url)
+        ControlGroup {
+            ForEach(Tapbacks.all, id: \.key) { tapback in
+                Button(tapback.emoji) { store.react(tapback.emoji, to: message, in: chat) }
+                    .accessibilityLabel(tapback.key)
+            }
+        }
+        .controlGroupStyle(.palette)
         Button("Copy", systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
             if urls.isEmpty { NSPasteboard.general.setString(message.text, forType: .string) }

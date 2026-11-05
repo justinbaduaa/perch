@@ -56,6 +56,7 @@ import Testing
     let rows = try messages.messages(chat: 1)
     #expect(rows.map(\.text) == ["hello", "from attributedBody", ""])
     #expect(rows.map(\.reactions) == [["😂"], [], []])  // B's ❤️ was removed by the 3000 row
+    #expect(rows.map(\.mine) == ["😂", nil, nil])  // the 😂 on A is mine
     #expect(rows[1].fromMe && rows[0].sender == "+15551234567")
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
 
