@@ -9,9 +9,13 @@ struct Chat: Identifiable, Hashable {
     let identifier: String
     let groupName: String?
     let handles: [String]
+    /// What Messages' Hide Alerts list calls a group chat. A 1:1 chat goes by its identifier there.
+    var groupID: String?
     var lastActive = Date.distantPast
     /// ROWID of their newest unread message, unless I've written since, which means I read it.
     var unread: Int64?
+
+    var isGroup: Bool { guid.contains(";+;") }
 }
 
 struct Attachment: Hashable {
@@ -61,18 +65,25 @@ final class MessagesDB {
         return id
     }
 
+    /// Changes when something is read or marked unread anywhere, which adds no row.
+    func unreadCount() throws -> Int64 {
+        var n: Int64 = 0
+        try query("SELECT COUNT(*) FROM message WHERE is_read = 0 AND is_from_me = 0") { n = $0.int(0) }
+        return n
+    }
+
     /// Most recently active conversations first.
     func chats(limit: Int64 = 100) throws -> [Chat] {
         var out: [Chat] = []
         try query("""
             WITH top AS (
-              SELECT c.ROWID AS id, c.guid, c.chat_identifier, c.display_name, MAX(cmj.message_date) AS last
+              SELECT c.ROWID AS id, c.guid, c.chat_identifier, c.display_name, c.group_id, MAX(cmj.message_date) AS last
               FROM chat c JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
               GROUP BY c.ROWID ORDER BY last DESC LIMIT ?)
             SELECT id, guid, chat_identifier, display_name,
               (SELECT group_concat(h.id, ',') FROM chat_handle_join j
                  JOIN handle h ON h.ROWID = j.handle_id WHERE j.chat_id = top.id),
-              last,
+              last, group_id,
               (SELECT MAX(m.ROWID) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
                  WHERE j.chat_id = top.id AND m.is_from_me = 0 AND m.is_read = 0
                    AND m.item_type = 0 AND m.associated_message_type = 0),
@@ -80,11 +91,12 @@ final class MessagesDB {
                  WHERE j.chat_id = top.id AND m.is_from_me = 1)
             FROM top ORDER BY last DESC
             """, limit) { r in
-            let unread = r.int(6), mine = r.int(7)  // 0 when there is none
+            let unread = r.int(7), mine = r.int(8)  // 0 when there is none
             out.append(Chat(
                 id: r.int(0), guid: r.text(1) ?? "", identifier: r.text(2) ?? "",
                 groupName: r.text(3).flatMap { $0.isEmpty ? nil : $0 },
                 handles: r.text(4)?.split(separator: ",").map(String.init) ?? [],
+                groupID: r.text(6),
                 lastActive: appleDate(r.int(5)),
                 unread: unread > mine ? unread : nil))
         }

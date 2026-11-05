@@ -72,10 +72,7 @@ struct PeopleView: View {
                         }
                         .buttonStyle(.plain)
                         .onHover { hovered = $0 ? chat.id : nil }
-                        .contextMenu {
-                            let pinned = store.pins.contains(chat.guid)
-                            Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") { store.togglePin(chat) }
-                        }
+                        .contextMenu { ChatMenu(store: store, chat: chat) }
                     }
                 }
                 .padding(.horizontal, 6).padding(.bottom, 8)
@@ -92,6 +89,26 @@ struct PeopleView: View {
         store.markSeen(chat)
         withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
         store.onChange()  // the strip rings the open chat
+    }
+}
+
+/// Messages' menu for a conversation. The strip's right-click menu has the same items (`AppDelegate.chatMenu`).
+struct ChatMenu: View {
+    let store: Store
+    let chat: Chat
+
+    var body: some View {
+        let pinned = store.pins.contains(chat.guid), unread = store.isUnread(chat), muted = store.isMuted(chat)
+        Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") { store.togglePin(chat) }
+        Divider()
+        Button(unread ? "Mark as Read" : "Mark as Unread", systemImage: unread ? "envelope.open" : "envelope.badge") {
+            store.setRead(chat, unread)
+        }
+        Button(muted ? "Show Alerts" : "Hide Alerts", systemImage: muted ? "bell" : "bell.slash") { store.setMuted(chat, !muted) }
+        Divider()
+        Button("Open in Messages", systemImage: "message") { MessagesApp.open(chat) }
+        Divider()
+        Button("Delete…", systemImage: "trash", role: .destructive) { store.confirmDelete(chat) }
     }
 }
 

@@ -18,7 +18,7 @@ import Testing
     sqlite3_open(path, &db)
     let sql = """
         CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT, group_id TEXT);
         CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
           date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
@@ -29,7 +29,7 @@ import Testing
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
 
         INSERT INTO handle VALUES (1, '+15551234567');
-        INSERT INTO chat VALUES (1, 'any;-;+15551234567', '+15551234567', ''), (2, 'any;+;chat9', 'chat9', 'Team');
+        INSERT INTO chat VALUES (1, 'any;-;+15551234567', '+15551234567', '', 'U1'), (2, 'any;+;chat9', 'chat9', 'Team', 'U2');
         INSERT INTO chat_handle_join VALUES (1, 1), (2, 1);
         INSERT INTO message (ROWID, guid, text, attributedBody, handle_id, date, is_from_me, item_type,
                              associated_message_type, associated_message_guid) VALUES
@@ -55,7 +55,8 @@ import Testing
     let messages = try MessagesDB(path: path)
     #expect(try messages.chats().map(\.groupName) == [nil, "Team"])
     #expect(try messages.chats().first?.handles == ["+15551234567"])
-    #expect(try messages.chats().map(\.unread) == [8, 9])  // their unread D came after my last message (R2)
+    #expect(try messages.chats().map(\.unread) == [8, 9])
+    #expect(try messages.chats().map(\.isGroup) == [false, true])  // their unread D came after my last message (R2)
 
     let rows = try messages.messages(chat: 1)
     #expect(rows.map(\.text) == ["hello", "from attributedBody", ""])

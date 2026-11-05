@@ -17,14 +17,14 @@ Drag Perch to Applications, open it, then grant:
 - **Contacts**: prompted on first launch, for names and photos.
 - **Automation > Messages**: prompted on your first send.
 - **Notifications**: prompted the first time you use Remind me.
-- **Accessibility**: prompted the first time you react or reply.
+- **Accessibility**: prompted the first time you react, reply or change a chat from its menu.
 - **Microphone** and **Screen Recording**: prompted the first time you record. After allowing screen recording, reopen Perch.
 
 `build.sh` signs with your first Apple Development identity, so these grants survive rebuilds. The DMG is not notarized: it opens on your Mac, but another Mac's Gatekeeper will block it.
 
 ## Interactions
 
-- The menu bar shows your pinned chats, then the people you talked to last, 5 in all. A new message, in or out, moves that chat forward. Pin or unpin from the avatar's right-click menu, or from the list behind "•••".
+- The menu bar shows your pinned chats, then the people you talked to last, 5 in all. A new message, in or out, moves that chat forward. Right-click an avatar, or a chat in the list behind "•••", for Messages' conversation menu: Pin, Mark as Read or Unread, Hide Alerts, Open in Messages and Delete… (which asks first).
 - Avatars overlap in the menu bar and spread out side by side when the pointer is over them or the panel is open; the item keeps one width, so nothing else in the menu bar moves. The hovered avatar's name and last activity show in a pill under it.
 - A blue ring marks a chat with something new from them that you haven't opened in Perch or answered.
 - "•••" opens every chat behind a search field. Return opens the top match.
@@ -38,8 +38,9 @@ Drag Perch to Applications, open it, then grant:
 - Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Double-click a message to react (❤️ 👍 👎 😂 ‼️ ❓; your current one takes it off). Right-click for the same reactions, Reply, Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
 - Swipe sideways on a message with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
-- Reactions and replies go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives a hidden second copy of Messages, so your own Messages window never moves.
-- Right-click the menu bar item to quit. Reduce Motion skips the grow and spread animations.
+- Reactions, replies, read state, Hide Alerts and Delete go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives a hidden second copy of Messages, so your own Messages window never moves.
+- Right-click the menu bar item to quit.
+- The expand button, and Open in Messages, open the thread in Messages, group chats included. Reduce Motion skips the grow and spread animations.
 
 ## Not supported
 

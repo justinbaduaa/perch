@@ -1,7 +1,7 @@
 import ApplicationServices
 import IMessage
 
-/// Tapbacks and threaded replies, which Messages' AppleScript can't send. Beeper's platform-imessage drives a hidden
+/// Tapbacks, threaded replies and conversation actions, which Messages' AppleScript can't do. Beeper's platform-imessage drives a hidden
 /// second copy of Messages through Accessibility, so your own Messages window never moves; Perch needs Accessibility.
 nonisolated enum HiddenMessages {
     /// The six classic tapbacks, as chat.db shows them and as platform-imessage names them.
@@ -28,6 +28,23 @@ nonisolated enum HiddenMessages {
     static func reply(text: String?, file: URL?, to original: String, chat: String) async throws {
         guard let api = try ready(to: "reply") else { return try await Task.sleep(for: .milliseconds(700)) }
         _ = try await api.sendMessage(threadID: chat, text: text, filePath: file?.path, quotedMessageID: original)
+    }
+
+    /// Marks the chat read, as opening it in Messages does (sending read receipts if they're on), or unread.
+    static func setRead(_ read: Bool, chat: String) async throws {
+        guard let api = try ready(to: "change chats") else { return }
+        if read { try await api.sendReadReceipt(threadID: chat) } else { try await api.markAsUnread(threadID: chat) }
+    }
+
+    /// Messages' Hide Alerts.
+    static func setMuted(_ muted: Bool, chat: String) async throws {
+        guard let api = try ready(to: "change chats") else { return }
+        try await api.updateThread(threadID: chat, muted: muted)
+    }
+
+    static func delete(chat: String) async throws {
+        guard let api = try ready(to: "delete chats") else { return }
+        try await api.deleteThread(threadID: chat)
     }
 
     /// The API, or nil against a fixture database, which has no Messages behind it.

@@ -73,11 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             if let slot = strip.slot(at: NSEvent.mouseLocation), slot < strip.bar.count {
-                let chat = strip.bar[slot]
-                let title = "\(store.pins.contains(chat.guid) ? "Unpin" : "Pin") \(store.shortName(chat))"
-                let item = menu.addItem(withTitle: title, action: #selector(togglePin), keyEquivalent: "")
-                item.target = self
-                item.representedObject = chat.guid
+                chatMenu(strip.bar[slot]).forEach(menu.addItem)
                 menu.addItem(.separator())
             }
             menu.addItem(withTitle: "Quit Perch", action: #selector(NSApplication.terminate), keyEquivalent: "q")
@@ -90,8 +86,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         show(chat, under: slot)
     }
 
-    @objc private func togglePin(_ item: NSMenuItem) {
-        if let chat = store.chats.first(where: { $0.guid == item.representedObject as? String }) { store.togglePin(chat) }
+    /// Messages' menu for a conversation, under its name. The list behind "•••" has the same one (`ChatMenu`).
+    private func chatMenu(_ chat: Chat) -> [NSMenuItem] {
+        store.refreshMuted()
+        let store = store, unread = store.isUnread(chat), muted = store.isMuted(chat)
+        return [
+            .sectionHeader(title: store.name(chat)),
+            ActionItem(store.pins.contains(chat.guid) ? "Unpin" : "Pin") { store.togglePin(chat) },
+            .separator(),
+            ActionItem(unread ? "Mark as Read" : "Mark as Unread") { store.setRead(chat, unread) },
+            ActionItem(muted ? "Show Alerts" : "Hide Alerts") { store.setMuted(chat, !muted) },
+            .separator(),
+            ActionItem("Open in Messages") { MessagesApp.open(chat) },
+            .separator(),
+            ActionItem("Delete…") { store.confirmDelete(chat) },
+        ]
     }
 
     // MARK: Panel
@@ -194,12 +203,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A 1:1 chat opens on its thread. Messages has no public link to a group thread, so a group opens the app.
     private func openInMessages() {
         hidePanel()
-        let handles = store.panelChat?.handles ?? []
-        let thread = handles.count == 1 ? URL(string: "sms:\(handles[0])") : nil
-        NSWorkspace.shared.open(thread ?? URL(filePath: "/System/Applications/Messages.app"))
+        if let chat = store.panelChat { MessagesApp.open(chat) }
     }
 
     private func makePanel() -> NSPanel {
@@ -232,6 +238,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         return panel
+    }
+}
+
+/// A menu item that runs a closure. Nonisolated like NSMenuItem's initialisers; menus fire on the main thread.
+nonisolated final class ActionItem: NSMenuItem {
+    private let run: @MainActor () -> Void
+
+    init(_ title: String, run: @escaping @MainActor () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("not used from nibs") }
+
+    @objc private func fire() {
+        let run = run  // a main-actor closure is Sendable; the item itself is not
+        MainActor.assumeIsolated { run() }
     }
 }
 

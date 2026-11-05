@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Sends through Messages' AppleScript in an `osascript` child, passing values as argv so nothing needs escaping.
 enum MessagesApp {
@@ -20,6 +20,12 @@ enum MessagesApp {
     static func send(file: URL, to chat: Chat) async throws {
         if dryRun { return try await Task.sleep(for: .milliseconds(700)) }
         try await run(chat, kind: "file", payload: stage(file).path)
+    }
+
+    /// Opens the thread in Messages. A group needs Messages' own `imessage://open?groupid=` link.
+    static func open(_ chat: Chat) {
+        let link = chat.isGroup ? "imessage://open?groupid=\(chat.identifier)" : "sms:\(chat.handles.first ?? chat.identifier)"
+        NSWorkspace.shared.open(URL(string: link) ?? URL(filePath: "/System/Applications/Messages.app"))
     }
 
     /// Targets the chat by guid. AppleScript chat ids can differ from chat.db's, so a 1:1 chat

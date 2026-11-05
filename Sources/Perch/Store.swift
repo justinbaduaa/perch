@@ -56,10 +56,18 @@ struct Pending: Identifiable {
     @ObservationIgnored var hidePanel: () -> Void = {}
 
     @ObservationIgnored private var db: MessagesDB?
-    @ObservationIgnored private var lastRowID: Int64 = -1
+    /// chat.db's newest row and unread count at the last poll; either changing reloads the chats.
+    @ObservationIgnored private var lastMark: [Int64] = []
     @ObservationIgnored private var nextPendingID: Int64 = -1
     /// Chat guid to the newest unread row opened in Perch, so the bar rings only what came after.
     @ObservationIgnored private var seen = UserDefaults.standard.dictionary(forKey: "seen") as? [String: Int] ?? [:]
+    /// Chat guids marked unread from Perch, ringed until opened.
+    @ObservationIgnored private var markedUnread = Set(UserDefaults.standard.stringArray(forKey: "markedUnread") ?? [])
+    /// Messages' Hide Alerts list, as of the last poll, and what Perch has set since.
+    @ObservationIgnored private var mutedKeys: Set<String> = []
+    @ObservationIgnored private var mutedOverride: [String: Bool] = [:]
+    /// Chats on their way out, kept off the bar until chat.db drops them.
+    @ObservationIgnored private var deleting: Set<Int64> = []
 
     func start() {
         recorder.onScreenEnded = { [unowned self] id in
@@ -100,15 +108,92 @@ struct Pending: Identifiable {
         onChange()
     }
 
-    /// Something they sent that I haven't opened in Perch or answered. Messages itself may still count it unread.
-    func isUnread(_ chat: Chat) -> Bool { chat.unread.map { $0 > seen[chat.guid] ?? 0 } ?? false }
+    /// Something they sent that I haven't opened in Perch or answered, or a chat I marked unread.
+    func isUnread(_ chat: Chat) -> Bool {
+        markedUnread.contains(chat.guid) || chat.unread.map { $0 > seen[chat.guid] ?? 0 } ?? false
+    }
 
     /// Opening a chat in Perch reads it, as far as the bar's rings go.
     func markSeen(_ chat: Chat?) {
-        guard let chat = chats.first(where: { $0.id == chat?.id }), let row = chat.unread.map(Int.init),
-              seen[chat.guid] != row else { return }
-        seen[chat.guid] = row
+        guard let chat = chats.first(where: { $0.id == chat?.id }) else { return }
+        var changed = markedUnread.remove(chat.guid) != nil
+        if let row = chat.unread.map(Int.init), seen[chat.guid] != row {
+            seen[chat.guid] = row
+            changed = true
+        }
+        guard changed else { return }
         UserDefaults.standard.set(seen, forKey: "seen")
+        UserDefaults.standard.set(Array(markedUnread), forKey: "markedUnread")
+    }
+
+    /// Mark as Read or Unread, here and in Messages.
+    func setRead(_ chat: Chat, _ read: Bool) {
+        if read {
+            markSeen(chat)
+        } else {
+            markedUnread.insert(chat.guid)
+            UserDefaults.standard.set(Array(markedUnread), forKey: "markedUnread")
+        }
+        onChange()
+        inMessages { try await HiddenMessages.setRead(read, chat: chat.guid) } undo: {}
+    }
+
+    func isMuted(_ chat: Chat) -> Bool {
+        mutedOverride[chat.guid] ?? mutedKeys.contains(chat.isGroup ? chat.groupID ?? "" : chat.identifier)
+    }
+
+    /// Hide or Show Alerts in Messages. Perch posts no message alerts of its own.
+    func setMuted(_ chat: Chat, _ muted: Bool) {
+        mutedOverride[chat.guid] = muted
+        inMessages { try await HiddenMessages.setMuted(muted, chat: chat.guid) } undo: { self.mutedOverride[chat.guid] = nil }
+    }
+
+    /// Reads Messages' Hide Alerts list: chat identifiers, or group ids, each muted until a date.
+    func refreshMuted() {
+        let domain = "com.apple.MobileSMS.CKDNDList" as CFString
+        CFPreferencesAppSynchronize(domain)
+        let list = CFPreferencesCopyAppValue("CKDNDListKey" as CFString, domain) as? [String: Int] ?? [:]
+        mutedKeys = Set(list.filter { Date(timeIntervalSince1970: TimeInterval($0.value)) > .now }.keys)
+        mutedOverride = mutedOverride.filter { guid, muted in  // drop what Messages has caught up with
+            guard let chat = chats.first(where: { $0.guid == guid }) else { return false }
+            return mutedKeys.contains(chat.isGroup ? chat.groupID ?? "" : chat.identifier) != muted
+        }
+    }
+
+    /// Asks first, as Messages does, then deletes the conversation in Messages.
+    func confirmDelete(_ chat: Chat) {
+        let alert = NSAlert()
+        alert.messageText = "Delete your conversation with \(name(chat))?"
+        alert.informativeText = "It's deleted in Messages too. This can't be undone."
+        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if panelChat?.id == chat.id { hidePanel() }
+        deleting.insert(chat.id)
+        withAnimation(.smooth) { chats.removeAll { $0.id == chat.id } }
+        onChange()
+        inMessages { try await HiddenMessages.delete(chat: chat.guid) } undo: {
+            self.deleting.remove(chat.id)
+            self.lastMark = []  // reload, which brings it back
+            self.poll()
+        }
+    }
+
+    /// Runs a change through the hidden copy of Messages. If it fails, undoes what Perch already showed and says why.
+    private func inMessages(_ change: @escaping () async throws -> Void, undo: @escaping () -> Void) {
+        Task {
+            do {
+                try await change()
+            } catch {
+                undo()
+                onChange()
+                let alert = NSAlert()
+                alert.messageText = "Messages didn't make the change"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
     }
 
     func messages(for chat: Chat) -> [Message] { (try? db?.messages(chat: chat.id)) ?? [] }
@@ -202,12 +287,13 @@ struct Pending: Identifiable {
     private func poll() {
         do {
             if db == nil { db = try MessagesDB(path: MessagesDB.path) }
-            let max = try db!.maxRowID()
+            let mark = [try db!.maxRowID(), try db!.unreadCount()]
             needsAccess = false
             readError = nil
-            guard max != lastRowID else { return }
-            lastRowID = max
-            chats = try db!.chats()
+            guard mark != lastMark else { return }
+            lastMark = mark
+            chats = try db!.chats().filter { !deleting.contains($0.id) }
+            refreshMuted()
             if panelShown { markSeen(panelChat) }  // arrived while open, so read
             revision += 1
         } catch {
