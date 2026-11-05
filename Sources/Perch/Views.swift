@@ -510,18 +510,24 @@ struct AudioChip: View {
     @State private var player: AVAudioPlayer?
     @State private var playing = false
     @State private var bars: [CGFloat] = []
+    /// How far it has played, 0...1. Kept when paused.
+    @State private var progress = 0.0
 
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 8) {
                 Image(systemName: playing ? "pause.fill" : "play.fill")
-                Text(Duration.seconds(player?.duration ?? 0).formatted(.time(pattern: .minuteSecond)))
+                // Counts up while it plays, as in Messages; shows the length otherwise.
+                Text(Duration.seconds((player?.duration ?? 0) * (playing || progress > 0 ? progress : 1))
+                    .formatted(.time(pattern: .minuteSecond)))
                     .font(.caption).monospacedDigit()
                 HStack(spacing: 2) {
-                    ForEach(bars.indices, id: \.self) { Capsule().frame(width: 2, height: max(2, bars[$0] * 16)) }
+                    ForEach(bars.indices, id: \.self) { i in
+                        Capsule().frame(width: 2, height: max(2, bars[i] * 16))
+                            .foregroundStyle(Double(i) / Double(bars.count) < progress ? .primary : .secondary)
+                    }
                 }
                 .frame(height: 16)
-                .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(.quaternary, in: .capsule)
@@ -540,11 +546,15 @@ struct AudioChip: View {
         if player.isPlaying { player.pause(); playing = false; return }
         nowPlaying?.stop()
         nowPlaying = player
-        player.play()
+        guard player.play() else { return }
         playing = true
         Task {
-            while player.isPlaying { try? await Task.sleep(for: .milliseconds(250)) }
+            while player.isPlaying {
+                progress = player.currentTime / max(player.duration, 0.01)
+                try? await Task.sleep(for: .milliseconds(50))
+            }
             playing = false
+            progress = player.currentTime / max(player.duration, 0.01)  // 0 once it finished, where it stopped otherwise
         }
     }
 }

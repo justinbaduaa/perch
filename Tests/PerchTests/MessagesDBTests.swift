@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SQLite3
 import Testing
 @testable import Perch
@@ -154,4 +155,29 @@ import Testing
     pb.clearContents()
     pb.setString("hello", forType: .string)
     #expect(Clipboard.pastedFiles(from: pb) == nil)
+}
+
+/// A quiet voice note comes back with its loudest moment just under full scale, under the same name.
+@Test func voiceNotesComeUpToANormalLevel() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let quiet = dir.appending(path: "Voice note.m4a")
+    let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+    let tone = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100)!
+    tone.frameLength = 44_100
+    for i in 0..<44_100 { tone.floatChannelData![0][i] = 0.03 * sin(Float(i) * 2 * .pi * 220 / 44_100) }  // peaks at -30 dBFS
+    do {
+        let file = try AVAudioFile(forWriting: quiet, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100,
+                                                                 AVNumberOfChannelsKey: 1])
+        try file.write(from: tone)
+    }
+
+    let loud = await Recorder.louder(quiet)
+    #expect(loud.lastPathComponent == "Voice note.m4a" && loud != quiet)
+    let read = try AVAudioFile(forReading: loud)
+    let buffer = AVAudioPCMBuffer(pcmFormat: read.processingFormat, frameCapacity: AVAudioFrameCount(read.length))!
+    try read.read(into: buffer)
+    let peak = (0..<Int(buffer.frameLength)).map { abs(buffer.floatChannelData![0][$0]) }.max() ?? 0
+    #expect(peak > 0.7 && peak <= 1, "peak \(peak)")
 }

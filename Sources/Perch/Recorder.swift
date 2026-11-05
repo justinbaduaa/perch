@@ -78,12 +78,37 @@ import CoreGraphics
         started = .now
     }
 
-    /// The file to send: the voice note, stopped now, or the finished screen capture.
+    /// The file to send: the voice note, stopped now and brought up to a normal level, or the finished screen capture.
     func stop() async throws -> URL? {
         defer { reset() }
         if let ready { return ready }
         audio?.stop()
-        return audio == nil ? nil : file
+        guard audio != nil, let file else { return nil }
+        return await Self.louder(file)
+    }
+
+    /// A Mac's microphone level is often set low (input volume 27% here left notes peaking 20 to 33 dB under full
+    /// scale, too quiet to hear). Scale the note so its loudest moment sits at -1 dBFS, by at most 30 dB, into a
+    /// new file of the same name. Returns the original if it's already loud or can't be read.
+    nonisolated static func louder(_ url: URL) async -> URL {
+        await Task.detached {
+            guard let input = try? AVAudioFile(forReading: url),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: AVAudioFrameCount(input.length)),
+                  (try? input.read(into: buffer)) != nil, let channels = buffer.floatChannelData else { return url }
+            let count = Int(buffer.frameLength), channelCount = Int(buffer.format.channelCount)
+            var peak: Float = 0
+            for c in 0..<channelCount { for i in 0..<count { peak = max(peak, abs(channels[c][i])) } }
+            let gain = min(0.89 / max(peak, .leastNonzeroMagnitude), 31.6)
+            guard gain > 1.12 else { return url }  // within 1 dB already
+            for c in 0..<channelCount { for i in 0..<count { channels[c][i] *= gain } }
+            let out = url.deletingLastPathComponent().appending(path: "louder").appending(path: url.lastPathComponent)
+            guard (try? FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)) != nil,
+                  let output = try? AVAudioFile(forWriting: out, settings: input.fileFormat.settings,
+                                                commonFormat: .pcmFormatFloat32, interleaved: false),
+                  (try? output.write(from: buffer)) != nil else { return url }
+            output.close()
+            return out
+        }.value
     }
 
     func discard() {
