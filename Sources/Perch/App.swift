@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         pill.ignoresMouseEvents = true
         store.onChange = { [unowned self] in strip.update() }
+        store.showPanel = { [unowned self] chat in if !store.panelShown || store.panelChat?.id != chat.id { show(chat) } }
+        store.hidePanel = { [unowned self] in hidePanel() }
         store.start()
         strip.update()
 
@@ -45,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    /// A screen capture outlives the app otherwise, recording with nothing in Perch to stop it.
+    func applicationWillTerminate(_ notification: Notification) { store.recorder.discard() }
 
     /// Parts the strip around the hovered avatar; with the panel open, its composer says "Switch to …".
     private func pointerMoved() {

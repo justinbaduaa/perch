@@ -77,3 +77,15 @@ import Testing
     #expect(!file.landed(in: [row("on it")]))
     #expect(file.landed(in: [row("", file: "/Users/x/Library/Messages/Attachments/ab/IMG_1.heic")]))
 }
+
+/// Hovering never moves the hovered avatar, and parting never needs more than the strip's fixed width.
+@Test func focusedAvatarHoldsStillInsideAFixedWidth() {
+    for count in 1...6 {
+        let resting = AvatarStrip.layout(count, parting: nil), width = AvatarStrip.width(count)
+        for focus in 0..<count {
+            let parted = AvatarStrip.layout(count, parting: focus)
+            #expect(parted[focus] == resting[focus])
+            #expect(parted.allSatisfy { $0 >= 0 && $0 + AvatarStrip.size <= width })
+        }
+    }
+}

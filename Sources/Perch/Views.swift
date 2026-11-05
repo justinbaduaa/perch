@@ -363,18 +363,28 @@ struct Composer: View {
             HStack(spacing: 14) {
                 let recorder = store.recorder
                 if recorder.kind != nil, recorder.chatID == chat.id {
-                    Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(.red)
-                    if recorder.finishing {
-                        Text("Preparing…").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        TimelineView(.periodic(from: recorder.started, by: 1)) { context in
-                            Text(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))
+                    Image(systemName: "circle.fill").font(.system(size: 8))
+                        .foregroundStyle(recorder.ready == nil ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    Group {
+                        if let ready = recorder.ready {
+                            Text(ready.pathExtension == "png" ? "Screenshot" : "Screen recording")
+                        } else if recorder.finishing {
+                            Text("Preparing…")
+                        } else if recorder.kind == .screen {
+                            Text("Stop in the menu bar")  // the system's capture owns the stop button
+                        } else {
+                            TimelineView(.periodic(from: recorder.started, by: 1)) { context in
+                                Text(Duration.seconds(context.date.timeIntervalSince(recorder.started)).formatted(.time(pattern: .minuteSecond)))
+                            }
+                            .monospacedDigit()
                         }
-                        .font(.caption).monospacedDigit()
                     }
+                    .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     tool("xmark", "Discard recording") { recorder.discard(); store.onChange() }
-                    sendButton("Send", action: finishRecording).disabled(recorder.finishing)
+                    if recorder.kind == .voice || recorder.ready != nil {
+                        sendButton("Send", action: finishRecording).disabled(recorder.finishing)
+                    }
                 } else {
                     Group {
                         tool("waveform", "Record voice") { record(.voice) }
@@ -417,6 +427,7 @@ struct Composer: View {
                 try await store.recorder.start(kind, for: chat)
                 store.sendError = nil
                 store.onChange()  // the strip rings the chat being recorded
+                if kind == .screen { store.hidePanel() }  // out of the way of the toolbar and out of the recording
             } catch {
                 store.sendError = error.localizedDescription
             }

@@ -44,12 +44,19 @@ struct Pending: Identifiable {
     var hoverChat: Chat?
     let contacts = ContactBook()
     @ObservationIgnored var onChange: () -> Void = {}
+    /// Set by the app delegate, which owns the panel.
+    @ObservationIgnored var showPanel: (Chat) -> Void = { _ in }
+    @ObservationIgnored var hidePanel: () -> Void = {}
 
     @ObservationIgnored private var db: MessagesDB?
     @ObservationIgnored private var lastRowID: Int64 = -1
     @ObservationIgnored private var nextPendingID: Int64 = -1
 
     func start() {
+        recorder.onScreenEnded = { [unowned self] id in
+            onChange()
+            if let chat = chats.first(where: { $0.id == id }) { showPanel(chat) }
+        }
         poll()
         Task {
             await contacts.load()
