@@ -142,7 +142,7 @@ final class AvatarStrip {
             if let more {
                 Image(systemName: "ellipsis").font(.system(size: 9, weight: .heavy))
                     .frame(width: size, height: size)
-                    .background(.gray.opacity(0.45), in: shape)
+                    .background(Color(white: dark ? 0.33 : 0.72), in: shape)  // opaque, so it matches over the bare bar and the capsule
                     .overlay { if more == open { shape.strokeBorder(.primary, lineWidth: 1.5) } }
                     .offset(x: xs[more])
             }
