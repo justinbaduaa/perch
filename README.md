@@ -25,7 +25,7 @@ Drag Perch to Applications, open it, then grant:
 ## Interactions
 
 - The menu bar shows your pinned chats, then the people you talked to last, 5 in all. A new message, in or out, moves that chat forward. Right-click an avatar, or a chat in the list behind "•••", for Messages' conversation menu: Pin, Mark as Read or Unread, Hide Alerts, Open in Messages and Delete… (which asks first).
-- Avatars overlap in the menu bar and spread out side by side when the pointer is over them or the panel is open; the item keeps one width, so nothing else in the menu bar moves. The hovered avatar's name and last activity show in a pill under it.
+- Avatars overlap in the menu bar, and the item is only as wide as that stack (85 pt with six slots). When the pointer is over them or the panel is open, they spread out side by side in a glass capsule floating over the menu bar, so nothing else in the menu bar moves. The hovered avatar's name and last activity show in a pill under it.
 - A blue ring marks a chat with something new from them that you haven't opened in Perch or answered.
 - "•••" opens every chat behind a search field. Return opens the top match.
 - Clicking an avatar shows its name in a pill, which grows into the panel. Clicking another one slides the panel over; clicking the same one, or anywhere else, closes it.

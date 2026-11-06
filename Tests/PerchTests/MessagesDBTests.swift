@@ -101,16 +101,18 @@ import Testing
     #expect(file.landed(in: [row("", file: "/Users/x/Library/Messages/Attachments/ab/IMG_1.heic")]))
 }
 
-/// Spread or gathered, the strip fits one width, and at rest the stack sits in the middle of it.
-@Test func stripKeepsOneWidth() {
+/// The item is as wide as the stack, and the stack sits in the middle of the spread strip, so it opens out from its centre.
+@Test func stripSpreadsFromTheStacksCentre() {
     for count in 1...6 {
         let width = AvatarStrip.width(count)
         for spread in [false, true] {
             #expect(AvatarStrip.layout(count, spread: spread).allSatisfy { $0 >= 0 && $0 + AvatarStrip.size <= width })
         }
         let rest = AvatarStrip.layout(count, spread: false)
-        #expect(abs(rest[0] - (width - rest[count - 1] - AvatarStrip.size)) < 0.001)
+        #expect(abs(rest[0] - (width - rest[count - 1] - AvatarStrip.size)) < 0.001)  // centred in the spread strip
+        #expect(abs(rest[count - 1] + AvatarStrip.size - rest[0] - AvatarStrip.stackWidth(count)) < 0.001)  // fills the item
     }
+    #expect(AvatarStrip.stackWidth(6) == 85 && AvatarStrip.width(6) == 140)
 }
 
 /// Only a video in a capture folder made after recording started counts; old captures and screenshots don't.

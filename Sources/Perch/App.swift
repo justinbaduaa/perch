@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.target = self
         button.action = #selector(clicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        strip.onClick = { [unowned self] in clicked() }
         pill.ignoresMouseEvents = true
         store.onChange = { [unowned self] in strip.update() }
         store.showPanel = { [unowned self] chat in if !store.panelShown || store.panelChat?.id != chat.id { show(chat) } }

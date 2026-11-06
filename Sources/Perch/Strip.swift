@@ -1,14 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar item. Avatars overlap, left on top, and all spread out side by side while the pointer is over the
-/// strip or the panel is open; "•••" at the end lists chats beyond the bar. The item is always as wide as the spread
-/// strip, with the overlapped stack centred in it, so the menu bar never moves.
+/// The menu bar item. Avatars overlap, left on top, with "•••" at the end listing chats beyond the bar. The item is only
+/// as wide as that stack. While the pointer is over it or the panel is open, the avatars spread out side by side in a
+/// glass capsule floating over the menu bar, so the items beside it are covered for a moment instead of pushed along.
 final class AvatarStrip {
     static let size: CGFloat = 20, rest: CGFloat = 13, gap: CGFloat = 4
     static let corner: CGFloat = 8  // squircle: closer to a circle than a square, like Hoy's
+    static let pad: CGFloat = 4  // capsule around the spread avatars
 
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    /// Clicks on the spread strip, which sits over the item and its neighbours. Read the click from `NSApp.currentEvent`.
+    var onClick: () -> Void {
+        get { lifted.onClick }
+        set { lifted.onClick = newValue }
+    }
+    private let lifted = Lifted()
     private(set) var hovered: Int?
     private var inside = false
     private let store: Store
@@ -27,19 +34,29 @@ final class AvatarStrip {
 
     private var openSlot: Int? { store.panelShown ? store.panelChat.flatMap(slot) ?? moreSlot : nil }
 
-    /// x of each slot: side by side when spread, overlapping and centred at rest.
+    /// x of each slot across the spread width: side by side when spread, overlapping and centred at rest, so the stack
+    /// opens out from the item's centre.
     static func layout(_ count: Int, spread: Bool) -> [CGFloat] {
-        let inset = spread ? 0 : (width(count) - CGFloat(max(count - 1, 0)) * rest - size) / 2
+        let inset = spread ? 0 : (width(count) - stackWidth(count)) / 2
         return (0..<count).map { inset + CGFloat($0) * (spread ? size + gap : rest) }
     }
 
+    /// The spread strip's width.
     static func width(_ count: Int) -> CGFloat { count == 0 ? 0 : CGFloat(count) * size + CGFloat(count - 1) * gap }
+    /// The item's width: the overlapped stack.
+    static func stackWidth(_ count: Int) -> CGFloat { count == 0 ? 0 : CGFloat(count - 1) * rest + size }
 
-    /// The strip on screen. Two points taller than the item, because the pointer can rest on the screen's top edge.
+    /// The item on screen.
+    private var itemFrame: NSRect? {
+        guard let button = item.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    /// The strip on screen: the stack, or the spread strip over it. Two points taller than the item, because the pointer
+    /// can rest on the screen's top edge.
     var rect: NSRect {
-        guard let button = item.button, let window = button.window else { return .zero }
-        let r = window.convertToScreen(button.convert(button.bounds, to: nil))
-        let w = button.image?.size.width ?? 0
+        guard let r = itemFrame else { return .zero }
+        let w = bar.isEmpty ? item.button?.image?.size.width ?? 0 : spread ? Self.width(slots) : Self.stackWidth(slots)
         return NSRect(x: r.midX - w / 2, y: r.minY, width: w, height: r.height + 2)
     }
 
@@ -48,14 +65,15 @@ final class AvatarStrip {
     func slot(at point: NSPoint) -> Int? {
         let r = rect
         guard r.contains(point), slots > 0 else { return nil }
-        return min(slots - 1, Int((point.x - r.minX + Self.gap / 2) / (Self.size + Self.gap)))
+        let x = point.x - (r.midX - Self.width(slots) / 2)
+        return max(0, min(slots - 1, Int((x + Self.gap / 2) / (Self.size + Self.gap))))
     }
 
     /// Screen point just under the menu bar, centred on `slot` as the spread strip draws it.
     func anchor(under slot: Int) -> NSPoint {
-        let spread = Self.layout(slots, spread: true)
-        guard spread.indices.contains(slot) else { return NSPoint(x: rect.midX, y: rect.minY - 6) }  // empty strip
-        return NSPoint(x: rect.minX + spread[slot] + Self.size / 2, y: rect.minY - 6)
+        let r = itemFrame ?? .zero, spread = Self.layout(slots, spread: true)
+        guard spread.indices.contains(slot) else { return NSPoint(x: r.midX, y: r.minY - 6) }  // empty strip
+        return NSPoint(x: r.midX - Self.width(slots) / 2 + spread[slot] + Self.size / 2, y: r.minY - 6)
     }
 
     /// Spreads or gathers the strip as the pointer enters or leaves. Returns true when the hovered slot changed.
@@ -99,12 +117,15 @@ final class AvatarStrip {
         button.setAccessibilityLabel(bar.isEmpty ? "Perch" : bar.map(store.name).joined(separator: ", "))
         guard !bar.isEmpty, xs.count == slots else {
             button.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: "Perch")
+            lifted.orderOut(nil)
             return
         }
         let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let rim = dark ? Color.black.opacity(0.45) : Color.white.opacity(0.85)  // reads as a cut between stacked avatars
         let shape = RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
-        let xs = xs, open = openSlot, more = moreSlot, size = Self.size
+        // Off the stack (spread, or on the way), the avatars draw in the floating window; at rest, in the item itself.
+        let stack = Self.layout(slots, spread: false), floating = slots > 1 && (spread || xs != stack)
+        let xs = floating ? xs : xs.map { $0 - stack[0] }, open = openSlot, more = moreSlot, size = Self.size
         let recording = bar.firstIndex { $0.id == store.recorder.chatID }
         let strip = ZStack(alignment: .leading) {
             ForEach(Array(bar.enumerated()), id: \.element.id) { i, chat in
@@ -123,10 +144,68 @@ final class AvatarStrip {
                     .offset(x: xs[more])
             }
         }
-        .frame(width: Self.width(slots), height: size, alignment: .leading)
+        .frame(width: floating ? Self.width(slots) : Self.stackWidth(slots), height: size, alignment: .leading)
         .environment(\.colorScheme, dark ? .dark : .light)
         let renderer = ImageRenderer(content: strip)
         renderer.scale = button.window?.backingScaleFactor ?? 2
-        button.image = renderer.nsImage
+        guard floating, let menuBar = button.window?.frame, let r = itemFrame else {
+            button.image = renderer.nsImage  // before the float goes, so the avatars never blink out
+            return lifted.orderOut(nil)
+        }
+        // 0 on the stack, 1 spread. The window spans the spread strip, centred on the item, the menu bar's height.
+        let opened = (xs[slots - 1] - xs[0] - stack[slots - 1] + stack[0]) / (CGFloat(slots - 1) * (Self.size + Self.gap - Self.rest))
+        lifted.show(renderer.nsImage, xs: xs, opened: opened, over: NSRect(
+            x: r.midX - Self.width(slots) / 2 - Self.pad, y: menuBar.minY, width: Self.width(slots) + 2 * Self.pad, height: menuBar.height))
+        button.image = NSImage(size: NSSize(width: Self.stackWidth(slots), height: size), flipped: false) { _ in true }  // holds the width
     }
+}
+
+/// The spread strip: a borderless window just above the menu bar's, so it floats over the items beside Perch's instead
+/// of pushing them along. It takes the clicks over those items too.
+private final class Lifted: NSPanel {
+    var onClick: () -> Void = {}
+    private let glass = NSGlassEffectView(), avatars = NSImageView()
+
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        let clicks = Clicks()
+        clicks.onClick = { [unowned self] in onClick() }
+        glass.tintColor = .black.withAlphaComponent(0.3)  // the panel's shade
+        avatars.imageScaling = .scaleNone
+        clicks.addSubview(glass)
+        clicks.addSubview(avatars)
+        contentView = clicks
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used from nibs") }
+
+    /// Draws `image` (the strip, `AvatarStrip.width` wide) across `frame`, with the capsule around the avatars at `xs`.
+    /// `opened` runs from 0 on the stack to 1 spread, and fades the capsule in with it.
+    func show(_ image: NSImage?, xs: [CGFloat], opened: CGFloat, over frame: NSRect) {
+        if self.frame != frame { setFrame(frame, display: false) }
+        let size = AvatarStrip.size, inset = AvatarStrip.pad, y = (frame.height - size) / 2, pad = min(inset, y)
+        avatars.frame = NSRect(x: inset, y: y, width: frame.width - 2 * inset, height: size)
+        avatars.image = image
+        let lo = xs.min() ?? 0, hi = (xs.max() ?? 0) + size
+        glass.frame = NSRect(x: inset + lo - pad, y: y - pad, width: hi - lo + 2 * pad, height: size + 2 * pad)
+        glass.cornerRadius = glass.frame.height / 2
+        glass.alphaValue = min(1, max(0, opened))
+        if !isVisible { orderFront(nil) }
+    }
+}
+
+/// Takes every click in the floating strip, on the first press even with Perch in the background.
+private final class Clicks: NSView {
+    var onClick: () -> Void = {}
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    override func mouseDown(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) { onClick() }
+    override func rightMouseUp(with event: NSEvent) { onClick() }
 }
