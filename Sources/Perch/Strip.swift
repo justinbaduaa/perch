@@ -16,6 +16,9 @@ final class AvatarStrip {
         set { lifted.onClick = newValue }
     }
     private let lifted = Lifted()
+    private var blank: NSImage?  // the item's picture while the avatars float
+    private var liftedAt: Date?  // when the avatars last left the item for the floating window
+    private static let handover: TimeInterval = 0.05
     private(set) var hovered: Int?
     private var inside = false
     private let store: Store
@@ -90,15 +93,15 @@ final class AvatarStrip {
 
     /// Eases toward the layout for the current bar, hover and open chat. Stops once settled, so it costs nothing at rest.
     func update() {
-        if xs.count != slots || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            xs = Self.layout(slots, spread: spread)
-        }
+        if xs.count != slots { xs = Self.layout(slots, spread: spread) }
         draw()
         guard easing == nil else { return }
         easing = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in
             MainActor.assumeIsolated {
                 let target = Self.layout(slots, spread: spread)  // read every tick, so leaving mid-spread turns it around
                 if xs.count != target.count { xs = target }
+                if let liftedAt, Date.now.timeIntervalSince(liftedAt) < Self.handover { return draw() }  // see `draw`
+                if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { xs = target }
                 if xs.indices.allSatisfy({ abs(target[$0] - xs[$0]) < 0.25 }) {
                     xs = target
                     easing?.invalidate()
@@ -148,23 +151,41 @@ final class AvatarStrip {
         .environment(\.colorScheme, dark ? .dark : .light)
         let renderer = ImageRenderer(content: strip)
         renderer.scale = button.window?.backingScaleFactor ?? 2
-        guard floating, let menuBar = button.window?.frame, let r = itemFrame else {
-            button.image = renderer.nsImage  // before the float goes, so the avatars never blink out
-            return lifted.orderOut(nil)
+        guard let menuBar = button.window?.frame, let r = itemFrame else { return button.image = renderer.nsImage }
+        // The floating window spans the spread strip, centred on the item, as tall as the menu bar.
+        let over = NSRect(x: r.midX - Self.width(slots) / 2 - Self.pad, y: menuBar.minY,
+                          width: Self.width(slots) + 2 * Self.pad, height: menuBar.height)
+        guard floating else {
+            // Back on the stack. macOS blurs a new item picture in over a frame, so the float keeps the same avatars
+            // on top of it a moment longer.
+            liftedAt = nil
+            button.image = renderer.nsImage
+            return lifted.settle(over: over)
         }
-        // 0 on the stack, 1 spread. The window spans the spread strip, centred on the item, the menu bar's height.
+        // 0 on the stack, 1 spread.
         let opened = (xs[slots - 1] - xs[0] - stack[slots - 1] + stack[0]) / (CGFloat(slots - 1) * (Self.size + Self.gap - Self.rest))
-        lifted.show(renderer.nsImage, xs: xs, opened: opened, over: NSRect(
-            x: r.midX - Self.width(slots) / 2 - Self.pad, y: menuBar.minY, width: Self.width(slots) + 2 * Self.pad, height: menuBar.height))
-        button.image = NSImage(size: NSSize(width: Self.stackWidth(slots), height: size), flipped: false) { _ in true }  // holds the width
+        lifted.show(renderer.nsImage, xs: xs, opened: opened, over: over, clickable: spread)
+        // The floating window can land a frame after the item changes, so for `handover` it shows the stack right on top
+        // of the item's (the easing holds still), and only then does the item empty and the spread start. The item keeps
+        // its width.
+        let since = liftedAt ?? .now
+        liftedAt = since
+        guard Date.now.timeIntervalSince(since) >= Self.handover else { return }
+        if blank?.size.width != Self.stackWidth(slots) {
+            blank = NSImage(size: NSSize(width: Self.stackWidth(slots), height: size), flipped: false) { _ in true }
+        }
+        if button.image !== blank { button.image = blank }
     }
 }
 
 /// The spread strip: a borderless window just above the menu bar's, so it floats over the items beside Perch's instead
-/// of pushing them along. It takes the clicks over those items too.
+/// of pushing them along. It takes the clicks over those items while spread. At rest it stays ordered in and opaque,
+/// with its contents hidden and clicks passing through: a window being ordered in, or brought up from zero opacity,
+/// can show a frame or two late, and the stack would blink out meanwhile.
 private final class Lifted: NSPanel {
     var onClick: () -> Void = {}
     private let glass = NSGlassEffectView(), avatars = NSImageView()
+    private var fading: Task<Void, Never>?
 
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -173,12 +194,15 @@ private final class Lifted: NSPanel {
         hasShadow = false
         level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        animationBehavior = .none
+        ignoresMouseEvents = true
         let clicks = Clicks()
         clicks.onClick = { [unowned self] in onClick() }
         glass.tintColor = .black.withAlphaComponent(0.3)  // the panel's shade
         avatars.imageScaling = .scaleNone
         clicks.addSubview(glass)
         clicks.addSubview(avatars)
+        clicks.isHidden = true
         contentView = clicks
     }
 
@@ -186,7 +210,9 @@ private final class Lifted: NSPanel {
 
     /// Draws `image` (the strip, `AvatarStrip.width` wide) across `frame`, with the capsule around the avatars at `xs`.
     /// `opened` runs from 0 on the stack to 1 spread, and fades the capsule in with it.
-    func show(_ image: NSImage?, xs: [CGFloat], opened: CGFloat, over frame: NSRect) {
+    func show(_ image: NSImage?, xs: [CGFloat], opened: CGFloat, over frame: NSRect, clickable: Bool) {
+        fading?.cancel()
+        fading = nil
         if self.frame != frame { setFrame(frame, display: false) }
         let size = AvatarStrip.size, inset = AvatarStrip.pad, y = (frame.height - size) / 2, pad = min(inset, y)
         avatars.frame = NSRect(x: inset, y: y, width: frame.width - 2 * inset, height: size)
@@ -195,7 +221,23 @@ private final class Lifted: NSPanel {
         glass.frame = NSRect(x: inset + lo - pad, y: y - pad, width: hi - lo + 2 * pad, height: size + 2 * pad)
         glass.cornerRadius = glass.frame.height / 2
         glass.alphaValue = min(1, max(0, opened))
+        ignoresMouseEvents = !clickable  // gathering back after the pointer left: clicks are for the neighbours again
+        contentView?.isHidden = false
         if !isVisible { orderFront(nil) }
+    }
+
+    /// Hides the avatars a moment after the stack is back in the item, leaving the window up for the next spread.
+    func settle(over frame: NSRect) {
+        ignoresMouseEvents = true
+        if self.frame != frame { setFrame(frame, display: false) }
+        if !isVisible { orderFront(nil) }
+        guard contentView?.isHidden == false, fading == nil else { return }
+        fading = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            contentView?.isHidden = true
+            fading = nil
+        }
     }
 }
 
