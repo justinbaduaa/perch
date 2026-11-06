@@ -114,6 +114,16 @@ final class AvatarStrip {
         }
     }
 
+    /// "•••"'s tile, lightening as the strip opens. Solid, because the menu bar and the floating window draw see-through
+    /// colours differently and it would jump at the hand-over. In the dark, these are the shades 45% grey had over the
+    /// bare bar and over the capsule.
+    private static func moreTile(_ opened: CGFloat, dark: Bool) -> Color {
+        guard dark else { return Color(white: 0.72) }
+        let rest: [CGFloat] = [0x65, 0x60, 0x5A], spread: [CGFloat] = [0x7B, 0x76, 0x73]
+        let c = zip(rest, spread).map { ($0 + ($1 - $0) * opened) / 255 }
+        return Color(red: c[0], green: c[1], blue: c[2])
+    }
+
     private func draw() {
         guard let button = item.button else { return }
         let bar = bar, store = store
@@ -129,6 +139,9 @@ final class AvatarStrip {
         // Off the stack (spread, or on the way), the avatars draw in the floating window; at rest, in the item itself.
         let stack = Self.layout(slots, spread: false), floating = slots > 1 && (spread || xs != stack)
         let xs = floating ? xs : xs.map { $0 - stack[0] }, open = openSlot, more = moreSlot, size = Self.size
+        // 0 on the stack, 1 spread.
+        let opened = slots < 2 ? 0 : min(1, max(0, (xs[slots - 1] - xs[0] - stack[slots - 1] + stack[0])
+            / (CGFloat(slots - 1) * (Self.size + Self.gap - Self.rest))))
         let recording = bar.firstIndex { $0.id == store.recorder.chatID }
         let strip = ZStack(alignment: .leading) {
             ForEach(Array(bar.enumerated()), id: \.element.id) { i, chat in
@@ -142,7 +155,7 @@ final class AvatarStrip {
             if let more {
                 Image(systemName: "ellipsis").font(.system(size: 9, weight: .heavy))
                     .frame(width: size, height: size)
-                    .background(Color(white: dark ? 0.33 : 0.72), in: shape)  // opaque, so it matches over the bare bar and the capsule
+                    .background(Self.moreTile(opened, dark: dark), in: shape)
                     .overlay { if more == open { shape.strokeBorder(.primary, lineWidth: 1.5) } }
                     .offset(x: xs[more])
             }
@@ -162,8 +175,6 @@ final class AvatarStrip {
             button.image = renderer.nsImage
             return lifted.settle(over: over)
         }
-        // 0 on the stack, 1 spread.
-        let opened = (xs[slots - 1] - xs[0] - stack[slots - 1] + stack[0]) / (CGFloat(slots - 1) * (Self.size + Self.gap - Self.rest))
         lifted.show(renderer.nsImage, xs: xs, opened: opened, over: over, clickable: spread)
         // The floating window can land a frame after the item changes, so for `handover` it shows the stack right on top
         // of the item's (the easing holds still), and only then does the item empty and the spread start. The item keeps
