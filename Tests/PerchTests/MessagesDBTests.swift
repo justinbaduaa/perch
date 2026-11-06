@@ -181,3 +181,10 @@ import Testing
     let peak = (0..<Int(buffer.frameLength)).map { abs(buffer.floatChannelData![0][$0]) }.max() ?? 0
     #expect(peak > 0.7 && peak <= 1, "peak \(peak)")
 }
+
+/// The tapback picker's recent row is Messages' own: emoji only, newest first, in the tone platform-imessage sends,
+/// without the six that already have a row (👍🏽 comes out as 👍, which does).
+@Test func recentEmojiMatchMessagesRow() {
+    let order = ["emoji:🥀", "emoji:👨🏿‍❤️‍💋‍👨🏿", "sticker:B7576BAE", "emoji:😭", "emoji:❤️", "emoji:👍🏽", "emoji:🥀"]
+    #expect(HiddenMessages.recentEmoji(order) == ["🥀", "👨‍❤️‍💋‍👨", "😭"])
+}

@@ -9,6 +9,21 @@ nonisolated enum HiddenMessages {
         ("❤️", "heart"), ("👍", "like"), ("👎", "dislike"), ("😂", "laugh"), ("‼️", "emphasize"), ("❓", "question"),
     ]
 
+    /// Messages' row of recent emoji tapbacks: the emoji last picked anywhere on this Mac, newest first, leaving out
+    /// stickers and the six above. Picking one sends it through Messages' own emoji picker, which moves it to the front.
+    static func recentEmoji(_ order: [String]? = nil) -> [String] {
+        let domain = "com.apple.EmojiPreferences" as CFString
+        if order == nil { CFPreferencesAppSynchronize(domain) }
+        let order = order ?? CFPreferencesCopyAppValue("com.apple.stickers.recency.order" as CFString, domain) as? [String] ?? []
+        var seen = Set(tapbacks.map(\.emoji))
+        return order.compactMap { $0.hasPrefix("emoji:") ? plain(String($0.dropFirst(6))) : nil }.filter { seen.insert($0).inserted }
+    }
+
+    /// `emoji` in the default skin tone, which is the one platform-imessage always picks.
+    static func plain(_ emoji: String) -> String {
+        String(String.UnicodeScalarView(emoji.unicodeScalars.filter { !(0x1F3FB...0x1F3FF).contains($0.value) }))
+    }
+
     struct Failure: LocalizedError { let errorDescription: String? }
 
     /// Built once, on first use: platform-imessage allows one per process.

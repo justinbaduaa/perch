@@ -258,8 +258,8 @@ struct ConversationView: View {
             Avatar(image: store.photo(chat), name: store.name(chat), size: 32)
             VStack(alignment: .leading, spacing: 1) {
                 Text(store.name(chat)).font(.headline).lineLimit(1)
-                if let last = messages.last(where: { !$0.fromMe }) {
-                    Text("Active \(last.date.formatted(.relative(presentation: .named, unitsStyle: .narrow)))")
+                if let last = messages.last {  // iMessage has no online status, so this is the only "when"
+                    Text("Last message \(last.date.formatted(.relative(presentation: .named, unitsStyle: .narrow)))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -363,16 +363,28 @@ struct MessageRow: View {
         .padding(.top, badges.isEmpty ? 0 : 10)  // room for the badges above the bubble
     }
 
-    /// The six tapbacks, from a double-click. Mine is marked; picking it again takes it off.
+    /// Messages' tapback picker, from a double-click: the six, then your recent emoji (your own custom one first) and the
+    /// smiley for any other. Mine is marked; picking it again takes it off.
     private var tapbackBar: some View {
         let mine = store.tapbacks[message.guid] ?? message.mine
-        return HStack(spacing: 2) {
-            ForEach(HiddenMessages.tapbacks, id: \.key) { tapback in
-                EmojiButton(emoji: tapback.emoji, selected: mine == tapback.emoji) {
-                    picking = false
-                    store.react(tapback.emoji, to: message, in: chat)
+        let custom = mine.flatMap { emoji in HiddenMessages.tapbacks.contains { $0.emoji == emoji } ? nil : emoji }
+        let recent = ([custom].compactMap(\.self) + HiddenMessages.recentEmoji().filter { $0 != custom }).prefix(5)
+        let pick = { (emoji: String) in
+            picking = false
+            store.react(emoji, to: message, in: chat)
+        }
+        return VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                ForEach(HiddenMessages.tapbacks, id: \.key) { tapback in
+                    EmojiButton(emoji: tapback.emoji, selected: mine == tapback.emoji) { pick(tapback.emoji) }
+                        .accessibilityLabel(tapback.key)
                 }
-                .accessibilityLabel(tapback.key)
+            }
+            HStack(spacing: 2) {
+                ForEach(Array(recent), id: \.self) { emoji in
+                    EmojiButton(emoji: emoji, selected: mine == emoji) { pick(emoji) }
+                }
+                MoreEmoji { pick(HiddenMessages.plain($0)) }
             }
         }
         .padding(6)
@@ -826,6 +838,35 @@ private struct EmojiButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// The smiley that ends the tapback picker: opens the Mac's emoji picker and hands back the emoji you choose. The picker
+/// types into whatever has focus, so an invisible field under the smiley takes focus first.
+private struct MoreEmoji: View {
+    let chosen: (String) -> Void
+    @State private var typed = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button {
+            focused = true
+            DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
+        } label: {
+            Image(systemName: "face.smiling").font(.system(size: 20)).foregroundStyle(.secondary)
+                .frame(width: 34, height: 34).contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .background {
+            TextField("", text: $typed).focused($focused).frame(width: 1, height: 1).opacity(0).accessibilityHidden(true)
+        }
+        .onChange(of: typed) { _, text in
+            // Typed letters aren't tapbacks; digits are emoji only with a keycap after them.
+            guard let last = text.last, let first = last.unicodeScalars.first?.properties,
+                  first.isEmojiPresentation || first.isEmoji && last.unicodeScalars.count > 1 else { return }
+            chosen(String(last))
+        }
+        .accessibilityLabel("More emoji")
     }
 }
 
