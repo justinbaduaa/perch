@@ -298,6 +298,8 @@ struct MessageRow: View {
     /// Sent but not yet in chat.db: dimmed, with an upload mark on files, and no menu.
     var isPending = false
     @State private var picking = false
+    /// The picker was opened by the menu's smiley, so it opens the Mac's emoji picker straight away.
+    @State private var pickingAny = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -325,10 +327,10 @@ struct MessageRow: View {
                             .padding(.horizontal, 12).padding(.vertical, 8)
                             .background(.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
                             .simultaneousGesture(TapGesture(count: 2).onEnded { picking = !isPending })  // links still take one click
-                            .popover(isPresented: $picking, arrowEdge: .top) { tapbackBar }
                     }
                     if let link = message.link { LinkCard(link: link) }
                 }
+                .popover(isPresented: $picking, arrowEdge: .top) { tapbackBar }
                 .overlay(alignment: message.fromMe ? .topLeading : .topTrailing) {
                     // Tapbacks sit on the bubble's top corner, as in Messages: mine in blue.
                     HStack(spacing: -6) {
@@ -363,12 +365,19 @@ struct MessageRow: View {
         .padding(.top, badges.isEmpty ? 0 : 10)  // room for the badges above the bubble
     }
 
-    /// Messages' tapback picker, from a double-click: the six, then your recent emoji (your own custom one first) and the
-    /// smiley for any other. Mine is marked; picking it again takes it off.
-    private var tapbackBar: some View {
-        let mine = store.tapbacks[message.guid] ?? message.mine
+    /// My tapback, counting the one on its way.
+    private var mine: String? { store.tapbacks[message.guid] ?? message.mine }
+
+    /// The row under the six, as in Messages: my custom tapback first, if I have one, then my recent emoji, five in all.
+    private var recent: [String] {
         let custom = mine.flatMap { emoji in HiddenMessages.tapbacks.contains { $0.emoji == emoji } ? nil : emoji }
-        let recent = ([custom].compactMap(\.self) + HiddenMessages.recentEmoji().filter { $0 != custom }).prefix(5)
+        return Array(([custom].compactMap(\.self) + HiddenMessages.recentEmoji().filter { $0 != custom }).prefix(5))
+    }
+
+    /// Messages' tapback picker, from a double-click or the menu's smiley: the six, then the recent row and the smiley
+    /// for any other. Mine is marked; picking it again takes it off.
+    private var tapbackBar: some View {
+        let mine = mine
         let pick = { (emoji: String) in
             picking = false
             store.react(emoji, to: message, in: chat)
@@ -381,13 +390,14 @@ struct MessageRow: View {
                 }
             }
             HStack(spacing: 2) {
-                ForEach(Array(recent), id: \.self) { emoji in
+                ForEach(recent, id: \.self) { emoji in
                     EmojiButton(emoji: emoji, selected: mine == emoji) { pick(emoji) }
                 }
-                MoreEmoji { pick(HiddenMessages.plain($0)) }
+                MoreEmoji(openAtOnce: pickingAny) { pick(HiddenMessages.plain($0)) }
             }
         }
         .padding(6)
+        .onDisappear { pickingAny = false }
     }
 
     private var avatar: some View {
@@ -406,16 +416,27 @@ struct MessageRow: View {
     private var badges: [(emoji: String, mine: Bool)] {
         var theirs = message.reactions
         if let old = message.mine, let i = theirs.firstIndex(of: old) { theirs.remove(at: i) }
-        let mine = store.tapbacks[message.guid] ?? message.mine
         return theirs.map { ($0, false) } + (mine.map { [($0, true)] } ?? [])
     }
 
     @ViewBuilder private var menu: some View {
         let urls = message.attachments.map(\.url)
+        // The double-click picker's two rows. The Mac's emoji picker needs a text field to type into and a menu can't hold
+        // one, so this smiley opens the double-click picker with the emoji picker already up.
         ControlGroup {
             ForEach(HiddenMessages.tapbacks, id: \.key) { tapback in
                 Button { store.react(tapback.emoji, to: message, in: chat) } label: { Image(nsImage: emojiImage(tapback.emoji)) }
                     .accessibilityLabel(tapback.key)
+            }
+        }
+        .controlGroupStyle(.palette)
+        ControlGroup {
+            ForEach(recent, id: \.self) { emoji in
+                Button { store.react(emoji, to: message, in: chat) } label: { Image(nsImage: emojiImage(emoji)) }
+            }
+            Button("More emoji", systemImage: "face.smiling") {
+                pickingAny = true
+                picking = true
             }
         }
         .controlGroupStyle(.palette)
@@ -842,17 +863,16 @@ private struct EmojiButton: View {
 }
 
 /// The smiley that ends the tapback picker: opens the Mac's emoji picker and hands back the emoji you choose. The picker
-/// types into whatever has focus, so an invisible field under the smiley takes focus first.
+/// types into whatever has focus, so an invisible field under the smiley takes focus first. `openAtOnce` opens it as
+/// the smiley appears, for the right-click menu's smiley.
 private struct MoreEmoji: View {
+    var openAtOnce = false
     let chosen: (String) -> Void
     @State private var typed = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        Button {
-            focused = true
-            DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
-        } label: {
+        Button(action: open) {
             Image(systemName: "face.smiling").font(.system(size: 20)).foregroundStyle(.secondary)
                 .frame(width: 34, height: 34).contentShape(.circle)
         }
@@ -867,6 +887,12 @@ private struct MoreEmoji: View {
             chosen(String(last))
         }
         .accessibilityLabel("More emoji")
+        .onAppear { if openAtOnce { open() } }
+    }
+
+    private func open() {
+        focused = true
+        DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
     }
 }
 
