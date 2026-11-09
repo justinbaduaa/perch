@@ -30,14 +30,14 @@ Drag Perch to Applications, open it, then grant:
 - "•••" opens every chat behind a search field. Return opens the top match.
 - Clicking an avatar shows its name in a pill, which grows into the panel. Clicking another one slides the panel over; clicking the same one, or anywhere else, closes it.
 - With the panel open, hovering another avatar changes the composer to "Switch to …".
-- A message you send shows at once, dimmed, and settles when Messages writes it. A failed send puts your text back.
+- A message you send shows at once with Sending… under it, and goes out after the ones before it, so they arrive in order. Your last message then says Sent, Delivered, Read or Not Delivered, as in Messages. A failed send puts your text back.
 - Dropped files, pasted files and pictures (⌘V), the paperclip and finished screen recordings wait in the message box with an × each; Send sends them, then your text.
 - The waveform button records a voice note, with a live waveform: Send stops and sends it, × throws it away.
 - The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.
 - Links show as cards with the page's picture, title and site, read from the preview Messages saved, so Perch fetches nothing itself. Click one to open it.
 - Reactions sit in circles on the bubble's top corner, yours in blue.
-- Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
+- Four or more photos in one message sit in a stack under their count, as in Messages; click the count to open them out into a grid. Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Double-click a message to react: ❤️ 👍 👎 😂 ‼️ ❓, then your five most recent emoji (the same row as Messages) and a smiley for any other. Your current one takes it off. Custom emoji go out in the default skin tone. Right-click for the same reactions, Reply, Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
 - Swipe their message right or yours left with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
 - Reactions, replies, read state, Hide Alerts and Delete go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives a hidden second copy of Messages, so your own Messages window never moves.

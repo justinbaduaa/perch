@@ -22,6 +22,7 @@ struct Attachment: Hashable {
     let url: URL
     let mime: String
     var isAudio: Bool { mime.hasPrefix("audio/") }
+    var isImage: Bool { mime.hasPrefix("image/") }
     var isVideo: Bool { mime.hasPrefix("video/") }
 }
 
@@ -32,6 +33,11 @@ struct LinkPreview: Hashable {
     let site: String?
     /// The page's picture, which Messages keeps as one of the message's attachments.
     var image: URL?
+}
+
+/// How far a message of mine has got, as Messages writes under the last one.
+enum Receipt: Equatable {
+    case sending, sent, delivered, read(Date), failed
 }
 
 struct Message: Identifiable {
@@ -48,6 +54,8 @@ struct Message: Identifiable {
     /// The guid of the message this replies to, in a thread.
     var replyTo: String?
     var link: LinkPreview?
+    /// Mine only.
+    var receipt: Receipt?
 }
 
 struct DBError: Error { let message: String }
@@ -80,6 +88,16 @@ final class MessagesDB {
         var n: Int64 = 0
         try query("SELECT COUNT(*) FROM message WHERE is_read = 0 AND is_from_me = 0") { n = $0.int(0) }
         return n
+    }
+
+    /// Changes when one of my recent messages is sent, delivered, read or fails, which adds no row.
+    func receiptMark() throws -> [Int64] {
+        var mark: [Int64] = []
+        try query("""
+            SELECT SUM(is_sent), SUM(is_delivered), MAX(date_read), SUM(error != 0) FROM message
+            WHERE is_from_me = 1 AND ROWID > (SELECT MAX(ROWID) FROM message) - 100
+            """) { r in mark = [r.int(0), r.int(1), r.int(2), r.int(3)] }
+        return mark
     }
 
     /// Most recently active conversations first.
@@ -121,7 +139,8 @@ final class MessagesDB {
         try query("""
             SELECT m.ROWID, m.guid, m.date, m.is_from_me, h.id, m.text, m.attributedBody,
                    m.associated_message_type, m.associated_message_guid, m.associated_message_emoji,
-                   m.thread_originator_guid, m.balloon_bundle_id, m.payload_data
+                   m.thread_originator_guid, m.balloon_bundle_id, m.payload_data,
+                   m.is_sent, m.is_delivered, m.date_read, m.error
             FROM chat_message_join cmj
             JOIN message m ON m.ROWID = cmj.message_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -137,6 +156,10 @@ final class MessagesDB {
                 if r.text(11) == "com.apple.messages.URLBalloonProvider", let preview = r.data(12).flatMap(linkPreview) {
                     message.link = preview.link
                     linkImages[message.id] = preview.image
+                }
+                if fromMe {
+                    message.receipt = r.int(16) != 0 ? .failed : r.int(15) > 0 ? .read(appleDate(r.int(15)))
+                        : r.int(14) != 0 ? .delivered : r.int(13) != 0 ? .sent : .sending
                 }
                 rows.append(message)
             } else if let target = r.text(8) {

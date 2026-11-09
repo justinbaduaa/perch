@@ -56,9 +56,11 @@ struct Pending: Identifiable {
     @ObservationIgnored var hidePanel: () -> Void = {}
 
     @ObservationIgnored private var db: MessagesDB?
-    /// chat.db's newest row and unread count at the last poll; either changing reloads the chats.
+    /// chat.db's newest row, unread count and receipts on my recent messages at the last poll; any change reloads.
     @ObservationIgnored private var lastMark: [Int64] = []
     @ObservationIgnored private var nextPendingID: Int64 = -1
+    /// The latest send. Each waits for the one before, so they go out in the order they were sent, as in Messages.
+    @ObservationIgnored private var lastSend: Task<Bool, Never>?
     /// Chat guid to the newest unread row opened in Perch, so the bar rings only what came after.
     @ObservationIgnored private var seen = UserDefaults.standard.dictionary(forKey: "seen") as? [String: Int] ?? [:]
     /// Chat guids marked unread from Perch, ringed until opened.
@@ -208,13 +210,24 @@ struct Pending: Identifiable {
 
     func photo(_ chat: Chat) -> NSImage? { chat.handles.count == 1 ? contacts.photo(chat.handles[0]) : nil }
 
-    /// Shows the send in the thread at once, then hands it to Messages, or to the hidden copy for a reply.
-    /// Returns false if it failed.
+    /// Shows the send in the thread at once, then hands it to Messages, or to the hidden copy for a reply, once the
+    /// sends before it have gone. Returns false if it failed.
     @discardableResult
     func send(_ text: String = "", file: URL? = nil, to chat: Chat, replyingTo original: Message? = nil) async -> Bool {
         let p = Pending(id: nextPendingID, chatID: chat.id, text: text, file: file, replyTo: original?.guid)
         nextPendingID -= 1
         withAnimation(.smooth) { pending.append(p) }
+        let before = lastSend
+        let this = Task {
+            _ = await before?.value
+            return await hand(p, to: chat, replyingTo: original)
+        }
+        lastSend = this
+        return await this.value
+    }
+
+    private func hand(_ p: Pending, to chat: Chat, replyingTo original: Message?) async -> Bool {
+        let (text, file) = (p.text, p.file)
         do {
             if let original {
                 try await HiddenMessages.reply(text: file == nil ? text : nil, file: file, to: original.guid, chat: chat.guid)
@@ -287,7 +300,7 @@ struct Pending: Identifiable {
     private func poll() {
         do {
             if db == nil { db = try MessagesDB(path: MessagesDB.path) }
-            let mark = [try db!.maxRowID(), try db!.unreadCount()]
+            let mark = [try db!.maxRowID(), try db!.unreadCount()] + (try db!.receiptMark())
             needsAccess = false
             readError = nil
             guard mark != lastMark else { return }

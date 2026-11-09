@@ -31,7 +31,8 @@ import Testing
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
           date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
           associated_message_guid TEXT, associated_message_emoji TEXT, is_read INTEGER DEFAULT 0,
-          thread_originator_guid TEXT, balloon_bundle_id TEXT, payload_data BLOB);
+          thread_originator_guid TEXT, balloon_bundle_id TEXT, payload_data BLOB, is_sent INTEGER DEFAULT 0,
+          is_delivered INTEGER DEFAULT 0, date_read INTEGER DEFAULT 0, error INTEGER DEFAULT 0);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
         CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT);
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
@@ -59,6 +60,7 @@ import Testing
         INSERT INTO message_attachment_join VALUES (3, 1), (8, 2), (10, 3);
         UPDATE message SET thread_originator_guid = 'A' WHERE ROWID = 3;
         UPDATE message SET is_read = 1 WHERE ROWID IN (1, 3);
+        UPDATE message SET is_sent = 1, is_delivered = 1, date_read = 9000000000 WHERE ROWID = 2;
         """
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
@@ -76,6 +78,7 @@ import Testing
     #expect(rows[1].fromMe && rows[0].sender == "+15551234567")
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
     #expect(rows.map(\.replyTo) == [nil, nil, "A"])
+    #expect(rows.map(\.receipt) == [nil, .read(Date(timeIntervalSinceReferenceDate: 9)), nil])  // only mine have one
 
     let link = try #require(try messages.messages(chat: 2).first?.link)
     #expect(link.title == "Cobalt" && link.site == "American Express")

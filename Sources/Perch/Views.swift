@@ -169,14 +169,15 @@ struct ConversationView: View {
                         MessageRow(store: store, chat: chat, message: m,
                                    showAvatar: next == nil || next?.fromMe != m.fromMe || next?.sender != m.sender,
                                    quoted: quoted(m), swipe: pull(m),
+                                   receipt: next == nil && waiting.isEmpty ? m.receipt : nil,
                                    reply: { replying = m })
                             .id(m.id)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { rows.byGuid[m.guid] = $0 }
                             .onDisappear { rows.byGuid[m.guid] = nil }
                     }
-                    ForEach(store.pending.filter { $0.chatID == chat.id && !$0.landed(in: messages) }) { p in
+                    ForEach(waiting) { p in
                         MessageRow(store: store, chat: chat, message: p.message, showAvatar: false, quoted: quoted(p.message),
-                                   isPending: true)
+                                   receipt: p.id == waiting.last?.id ? .sending : nil, isPending: true)
                             .transition(.scale(scale: 0.9, anchor: .bottomTrailing).combined(with: .opacity))
                     }
                 }
@@ -205,6 +206,9 @@ struct ConversationView: View {
         .onAppear { monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { scrolled($0) ? nil : $0 } }
         .onDisappear { monitor.map(NSEvent.removeMonitor) }
     }
+
+    /// My sends in this chat that chat.db doesn't have yet. They show after its rows.
+    private var waiting: [Pending] { store.pending.filter { $0.chatID == chat.id && !$0.landed(in: messages) } }
 
     private func quoted(_ m: Message) -> Message? { m.replyTo.flatMap { guid in messages.first { $0.guid == guid } } }
 
@@ -283,6 +287,20 @@ struct ConversationView: View {
 private let separator = relativeFormatter(.standalone)
 private let inline = relativeFormatter(.middleOfSentence)
 
+extension Receipt {
+    /// What Messages writes under the message.
+    var label: String {
+        switch self {
+        case .sending: "Sending…"
+        case .sent: "Sent"
+        case .delivered: "Delivered"
+        case .read(let date):
+            "Read \(Calendar.current.isDateInToday(date) ? date.formatted(date: .omitted, time: .shortened) : inline.string(from: date))"
+        case .failed: "Not Delivered"
+        }
+    }
+}
+
 private func relativeFormatter(_ context: Formatter.Context) -> DateFormatter {
     let f = DateFormatter()
     f.dateStyle = .short
@@ -301,8 +319,10 @@ struct MessageRow: View {
     var quoted: Message?
     /// How far a two-finger swipe has pulled it toward replying.
     var swipe: CGFloat = 0
+    /// Written under it: Messages does this for the thread's last message, when it's mine.
+    var receipt: Receipt?
     var reply: () -> Void = {}
-    /// Sent but not yet in chat.db: dimmed, with an upload mark on files, and no menu.
+    /// Sent but not yet in chat.db: no menu or tapbacks yet.
     var isPending = false
     @State private var picking = false
     /// The picker was opened by the menu's smiley, so it opens the Mac's emoji picker straight away.
@@ -320,14 +340,7 @@ struct MessageRow: View {
                 VStack(alignment: message.fromMe ? .trailing : .leading, spacing: 4) {
                     ForEach(message.attachments.filter(\.isAudio), id: \.self) { AudioChip(url: $0.url) }
                     let media = message.attachments.filter { !$0.isAudio }
-                    if !media.isEmpty {
-                        MediaGrid(items: media).overlay(alignment: .topTrailing) {
-                            if isPending {
-                                Image(systemName: "icloud.and.arrow.up").font(.caption)
-                                    .padding(6).background(.ultraThinMaterial, in: .circle).padding(6)
-                            }
-                        }
-                    }
+                    if !media.isEmpty { MediaGrid(items: media, trailing: message.fromMe) }
                     // A bare link shows as its card alone, as in Messages.
                     if !message.text.isEmpty, message.link == nil || message.text.contains(where: \.isWhitespace) {
                         Text(linkified(message.text))
@@ -355,8 +368,11 @@ struct MessageRow: View {
                         .font(.caption2).foregroundStyle(.secondary)
                         .transition(.blurReplace)
                 }
+                if let receipt {
+                    Text(receipt.label).font(.caption2).foregroundStyle(receipt == .failed ? Color.red : Color.secondary)
+                        .padding(.horizontal, 4)
+                }
             }
-            .opacity(isPending ? 0.55 : 1)
             .contextMenu { if !isPending { menu.labelStyle(.titleAndIcon) } }
             .offset(x: swipe)
             .background(alignment: swipe < 0 ? .trailing : .leading) {
@@ -488,43 +504,80 @@ struct MessageRow: View {
     }
 }
 
+/// A message's photos and videos, laid out as Messages does: one on its own, two or three in a row, and more in a
+/// stack under their count. Clicking the count opens the stack out into a grid, and again gathers it back.
 struct MediaGrid: View {
     let items: [Attachment]
+    /// Mine, so the count lines up on the right.
+    var trailing = false
+    @State private var open = false
 
     var body: some View {
         if items.count == 1 {
-            Thumbnail(item: items[0], side: 220, square: false)
+            Thumbnail(item: items[0])
+        } else if items.count < 4 {
+            grid
         } else {
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(72), spacing: 4), count: min(3, items.count)), spacing: 4) {
-                ForEach(items, id: \.self) { Thumbnail(item: $0, side: 72, square: true) }
+            VStack(alignment: trailing ? .trailing : .leading, spacing: 6) {
+                Button { withAnimation(.smooth(duration: 0.25)) { open.toggle() } } label: {
+                    Label(count, systemImage: open ? "square.stack.fill" : "square.grid.2x2.fill")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                if open { grid } else { stack }
             }
         }
+    }
+
+    private var grid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(72), spacing: 4), count: min(3, items.count)), spacing: 4) {
+            ForEach(items, id: \.self) { Thumbnail(item: $0, fill: CGSize(width: 72, height: 72)) }
+        }
+    }
+
+    /// The first on top, and the next two tilted out from behind it.
+    private var stack: some View {
+        ZStack {
+            ForEach(Array(items.prefix(3).enumerated().reversed()), id: \.offset) { i, item in
+                Thumbnail(item: item, fill: CGSize(width: 168, height: 216))
+                    .shadow(color: .black.opacity(0.3), radius: 3)
+                    .scaleEffect(1 - CGFloat(i) * 0.05)
+                    .rotationEffect(.degrees(Double(i) * 3))
+                    .offset(x: CGFloat(i) * 9)
+                    .allowsHitTesting(i == 0)
+            }
+        }
+        .padding(.trailing, 18)
+    }
+
+    private var count: String {
+        "\(items.count) \(items.allSatisfy(\.isImage) ? "Photos" : items.allSatisfy(\.isVideo) ? "Videos" : "Items")"
     }
 }
 
 /// Quick Look thumbnail for any file type. Click zooms it into Quick Look; drag copies the file out.
 struct Thumbnail: View {
     let item: Attachment
-    let side: CGFloat
-    let square: Bool
+    /// Fits the picture in a `side` square, or crops it to fill `fill`.
+    var side: CGFloat = 220
+    var fill: CGSize?
     @State private var image: NSImage?
     @State private var hovering = false
 
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: square ? .fill : .fit)
+                Image(nsImage: image).resizable().aspectRatio(contentMode: fill == nil ? .fit : .fill)
             } else {
                 Rectangle().fill(.quaternary)
             }
         }
-        .frame(width: square || image == nil ? side * (square ? 1 : 0.7) : nil,
-               height: square || image == nil ? side * (square ? 1 : 0.5) : nil)
-        .frame(maxWidth: side, maxHeight: side)
+        .frame(width: fill?.width ?? (image == nil ? side * 0.7 : nil), height: fill?.height ?? (image == nil ? side * 0.5 : nil))
+        .frame(maxWidth: fill?.width ?? side, maxHeight: fill?.height ?? side)
         .overlay {
             if item.isVideo { Image(systemName: "play.fill").font(.title2).foregroundStyle(.white).shadow(radius: 4) }
         }
-        .clipShape(.rect(cornerRadius: square ? 10 : 14, style: .continuous))
+        .clipShape(.rect(cornerRadius: (fill?.width ?? side) < 100 ? 10 : 14, style: .continuous))
         .scaleEffect(hovering ? 1.02 : 1)
         .animation(.smooth(duration: 0.15), value: hovering)
         .contentShape(.rect)
@@ -533,7 +586,7 @@ struct Thumbnail: View {
         .draggable(item.url)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { Preview.shared.frames[item.url] = $0 }
         .task(id: item.url) {
-            let request = QLThumbnailGenerator.Request(fileAt: item.url, size: CGSize(width: side, height: side),
+            let request = QLThumbnailGenerator.Request(fileAt: item.url, size: fill ?? CGSize(width: side, height: side),
                                                        scale: 2, representationTypes: .thumbnail)
             image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage
             Preview.shared.images[item.url] = image
