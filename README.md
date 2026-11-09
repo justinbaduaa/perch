@@ -39,7 +39,7 @@ Drag Perch to Applications, open it, then grant:
 - Reactions sit in circles on the bubble's top corner, yours in blue.
 - Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Double-click a message to react: ❤️ 👍 👎 😂 ‼️ ❓, then your five most recent emoji (the same row as Messages) and a smiley for any other. Your current one takes it off. Custom emoji go out in the default skin tone. Right-click for the same reactions, Reply, Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
-- Swipe sideways on a message with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
+- Swipe their message right or yours left with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
 - Reactions, replies, read state, Hide Alerts and Delete go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives a hidden second copy of Messages, so your own Messages window never moves.
 - Right-click the menu bar item to quit.
 - The expand button, and Open in Messages, open the thread in Messages, group chats included. Reduce Motion skips the grow and spread animations.

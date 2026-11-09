@@ -140,11 +140,15 @@ struct ConversationView: View {
     /// A two-finger swipe on one message: finger travel so far, and whether it turned out sideways.
     private struct Swipe {
         let guid: String
+        /// Toward the middle of the panel: right for their messages, left for mine.
+        var way: CGFloat = 1
         var x: CGFloat = 0, y: CGFloat = 0
         var sideways: Bool?
         var momentum = false  // the swipe ended; its momentum events are swallowed too
+        /// Finger travel toward the middle. Travel the other way doesn't move the message.
+        var pull: CGFloat { max(0, x * way) }
         /// Follows the fingers up to the reply arrow, then drags.
-        var shown: CGFloat { abs(x) <= replyReach ? x : (replyReach + (abs(x) - replyReach) * 0.25) * (x < 0 ? -1 : 1) }
+        var shown: CGFloat { (pull <= replyReach ? pull : replyReach + (pull - replyReach) * 0.25) * way }
     }
 
     /// Where each message row sits in the panel. A plain object, so scrolling doesn't re-render the thread.
@@ -204,19 +208,22 @@ struct ConversationView: View {
 
     private func quoted(_ m: Message) -> Message? { m.replyTo.flatMap { guid in messages.first { $0.guid == guid } } }
 
-    /// Either way the fingers go, the bubble slides toward the middle of the panel, off its reply arrow.
+    /// How far the bubble has slid toward the middle of the panel, off its reply arrow.
     private func pull(_ m: Message) -> CGFloat {
         guard let swipe, swipe.guid == m.guid, swipe.sideways == true else { return 0 }
-        return m.fromMe ? -abs(swipe.shown) : abs(swipe.shown)
+        return swipe.shown
     }
 
-    /// Two fingers sideways on a message pull it toward a reply arrow; letting go past the arrow replies, as in
-    /// Messages. Up and down still scroll. Returns true for the events of a reply swipe, so the thread stays put.
+    /// Two fingers toward the middle of the panel pull a message off its reply arrow; letting go past the arrow
+    /// replies, as in Messages. Up and down still scroll. Returns true for the events of a sideways swipe, so the
+    /// thread stays put.
     private func scrolled(_ event: NSEvent) -> Bool {
         if event.phase.isEmpty && event.momentumPhase.isEmpty { return false }  // a mouse wheel
         if event.phase == .began {
             let at = Preview.shared.host.map { $0.convert(event.locationInWindow, from: nil) } ?? .zero
-            swipe = rows.byGuid.first { $0.value.contains(at) }.map { Swipe(guid: $0.key) }
+            swipe = rows.byGuid.first { $0.value.contains(at) }.map { hit in
+                Swipe(guid: hit.key, way: messages.first { $0.guid == hit.key }?.fromMe == true ? -1 : 1)
+            }
             return false
         }
         guard var s = swipe else { return false }
@@ -234,14 +241,14 @@ struct ConversationView: View {
             swipe = s.sideways == false ? nil : s
             return s.sideways == true
         case .changed where s.sideways == true:
-            let before = abs(s.x) >= replyReach
+            let before = s.pull >= replyReach
             s.x += dx
-            if before != (abs(s.x) >= replyReach) { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            if before != (s.pull >= replyReach) { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
             swipe = s
             return true
         case .ended, .cancelled:
             guard s.sideways == true else { swipe = nil; return false }
-            if event.phase == .ended, abs(s.x) >= replyReach, let m = messages.first(where: { $0.guid == s.guid }) {
+            if event.phase == .ended, s.pull >= replyReach, let m = messages.first(where: { $0.guid == s.guid }) {
                 withAnimation(.smooth(duration: 0.2)) { replying = m }
             }
             withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
