@@ -79,10 +79,7 @@ struct PeopleView: View {
             }
             .scrollIndicators(.never)
         }
-        .task {
-            try? await Task.sleep(for: .milliseconds(400))  // after the panel has grown and become key, or focus won't stick
-            focused = true
-        }
+        .task(id: store.panelShown) { if store.panelShown { focused = true } }  // as the composer does
     }
 
     private func open(_ chat: Chat) {
@@ -766,6 +763,8 @@ struct Composer: View {
         .padding(10)
         .animation(.smooth(duration: 0.2), value: replying?.guid)
         .onChange(of: replying?.guid) { if replying != nil { focused = true } }
+        // Ready to type the moment the panel opens or switches here. The panel is key by the time this runs.
+        .task(id: store.panelShown) { if store.panelShown { focused = true } }
         // ⌘V with files or a picture on the clipboard puts them in the box, as a drop does. Text pastes as usual.
         .onAppear {
             pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -801,6 +800,7 @@ struct Composer: View {
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         store.stage(panel.urls, for: chat.id)
+        focused = true  // for a caption
     }
 
     private func record(_ kind: Recorder.Kind) {

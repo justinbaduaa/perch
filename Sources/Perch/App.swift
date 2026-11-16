@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var panel = makePanel()
     private let pill = AppDelegate.floatingPanel()
     private var mouseDownAt = NSPoint.zero
+    /// Whether that press came while a modal of ours was up. The file picker is one: macOS draws it in another
+    /// process, so clicks in it arrive here as clicks elsewhere.
+    private var downInModal = false
     private static let width: CGFloat = 340, height: CGFloat = 540
     /// Clear room around the glass for its own shadow, which the window edge would otherwise cut square.
     private static let margin: CGFloat = 24
@@ -38,14 +41,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [unowned self] event in pointerMoved(); return event }
 
         // Close on a click elsewhere, but not on a drag: dragging files in from Finder is how you drop them.
-        // Clicks on the strip arrive here too (another process draws it); `clicked` handles those.
+        // Nor on a click in the file picker. Clicks on the strip arrive here too (another process draws it);
+        // `clicked` handles those.
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown]) { [unowned self] event in
             let at = NSEvent.mouseLocation
             guard !strip.rect.contains(at) else { return }
             switch event.type {
-            case .leftMouseDown: mouseDownAt = at
-            case .leftMouseUp where hypot(at.x - mouseDownAt.x, at.y - mouseDownAt.y) < 4: hidePanel()
-            case .rightMouseDown: hidePanel()
+            case .leftMouseDown: (mouseDownAt, downInModal) = (at, NSApp.modalWindow != nil)
+            case .leftMouseUp where !downInModal && hypot(at.x - mouseDownAt.x, at.y - mouseDownAt.y) < 4: hidePanel()
+            case .rightMouseDown where NSApp.modalWindow == nil: hidePanel()
             default: break
             }
         }
