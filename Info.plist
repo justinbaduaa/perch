@@ -6,6 +6,8 @@
 	<string>com.justinbadua.perch</string>
 	<key>CFBundleName</key>
 	<string>Perch</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>Perch</string>
 	<key>CFBundlePackageType</key>

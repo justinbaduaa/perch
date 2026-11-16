@@ -7,9 +7,10 @@ cd "$(dirname "$0")"
 GIT_LFS_SKIP_SMUDGE=1 swift build -c release
 APP=build/Perch.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Perch "$APP/Contents/MacOS/Perch"
 cp Info.plist "$APP/Contents/Info.plist"
+cp Icon/AppIcon.icns "$APP/Contents/Resources/"  # Icon/make.sh redraws it from Icon/Perch.svg
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
 codesign --force --sign "${IDENTITY:--}" "$APP"
 

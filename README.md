@@ -11,14 +11,13 @@ Requires macOS 26 or later.
 open build/Perch.dmg
 ```
 
-Drag Perch to Applications, open it, then grant:
+Drag Perch to Applications and open it. The first launch opens Set up Perch, which lists every permission with its own Allow button and ticks each one off as macOS grants it, so no feature stops to ask later. Allow All runs every prompt macOS can show there, one after another.
 
-- **Full Disk Access**: System Settings > Privacy & Security > Full Disk Access, add Perch, relaunch. Perch reads `~/Library/Messages/chat.db`.
-- **Contacts**: prompted on first launch, for names and photos.
-- **Automation > Messages**: prompted on your first send.
-- **Notifications**: prompted the first time you use Remind me.
-- **Accessibility**: prompted the first time you react, reply or change a chat from its menu.
-- **Microphone** and **Screen Recording**: prompted the first time you record. After allowing screen recording, reopen Perch.
+- **Full Disk Access** reads `~/Library/Messages/chat.db`. macOS has no prompt for it: Open Settings, then drag Perch from the window into the list.
+- **Contacts** for names and photos, **Messages** (Automation) to send, **Accessibility** for reactions, replies and chat actions, **Notifications** for Remind me, and **Microphone** for voice notes.
+- **Screen Recording** is listed only without CleanShot X, which records for Perch otherwise.
+
+Setup opens at every launch until Full Disk Access is on, and until you close it once. Right-click the menu bar for Set Up Perch… to see it again.
 
 `build.sh` signs with your first Apple Development identity, so these grants survive rebuilds. The DMG is not notarized: it opens on your Mac, but another Mac's Gatekeeper will block it.
 

@@ -13,8 +13,9 @@ import Contacts
     private(set) var me: Entry?
     @ObservationIgnored private var photos: [String: NSImage] = [:]
 
+    /// Loads names and photos if Contacts is allowed. The setup window asks for it, so this never prompts.
     func load() async {
-        guard (try? await CNContactStore().requestAccess(for: .contacts)) == true else { return }
+        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return }
         (entries, me) = await Task.detached { Self.fetchAll() }.value
     }
 

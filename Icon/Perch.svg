@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <!-- A speech bubble shaped as a P, its tail the stem. Slanted 8°, and shifted so its weight sits just above centre. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2C2F37"/><stop offset="1" stop-color="#101116"/></linearGradient>
+    <linearGradient id="p" x1="0.2" y1="0" x2="0.6" y2="1"><stop offset="0" stop-color="#4FB0FF"/><stop offset="1" stop-color="#0A66FF"/></linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="22.5" fill="url(#bg)"/>
+  <path d="M 36.28 21.00 L 58.28 21.00 C 72.88 21.00 83.11 32.90 81.05 47.50 C 79.00 62.10 65.43 74.00 50.83 74.00 L 41.33 74.00 C 38.83 74.00 36.49 75.00 34.46 76.60 L 25.42 84.00 C 23.17 85.80 20.34 84.60 20.72 81.90 L 28.30 28.00 C 28.84 24.10 32.38 21.00 36.28 21.00 Z" fill="url(#p)"/>
+  <circle cx="42.55" cy="47.5" r="4" fill="#FFFFFF"/>
+  <circle cx="53.55" cy="47.5" r="4" fill="#FFFFFF" fill-opacity="0.8"/>
+  <circle cx="64.55" cy="47.5" r="4" fill="#FFFFFF" fill-opacity="0.6"/>
+</svg>

@@ -9,8 +9,10 @@ import SwiftUI
 }
 
 /// Clicking an avatar in the strip shows its name in a pill, which grows into a glass panel with the conversation.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = Store()
+    private let permissions = Permissions()
+    private var setup: NSWindow?
     private lazy var strip = AvatarStrip(store: store)
     private lazy var panel = makePanel()
     private let pill = AppDelegate.floatingPanel()
@@ -33,8 +35,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onChange = { [unowned self] in strip.update() }
         store.showPanel = { [unowned self] chat in if !store.panelShown || store.panelChat?.id != chat.id { show(chat) } }
         store.hidePanel = { [unowned self] in hidePanel() }
+        store.showSetup = { [unowned self] in showSetup() }
+        permissions.onContacts = { [unowned self] in
+            Task {
+                await store.contacts.load()
+                store.onChange()
+            }
+        }
         store.start()
         strip.update()
+        Task {
+            // Nothing works without Full Disk Access, so a new Mac opens on setup. After that, until it's closed once.
+            await permissions.refresh()
+            let dismissed = UserDefaults.standard.bool(forKey: "setUp")
+            if !permissions.granted.contains(.fullDisk) || !dismissed && !permissions.missing.isEmpty { showSetup() }
+        }
 
         // The status button is drawn outside this process, so tracking areas on it never fire; watch the pointer instead.
         NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [unowned self] _ in pointerMoved() }
@@ -81,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 chatMenu(strip.bar[slot]).forEach(menu.addItem)
                 menu.addItem(.separator())
             }
+            menu.addItem(ActionItem("Set Up Perch…") { [unowned self] in showSetup() })
             menu.addItem(withTitle: "Quit Perch", action: #selector(NSApplication.terminate), keyEquivalent: "q")
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
             return
@@ -106,6 +122,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             ActionItem("Delete…") { store.confirmDelete(chat) },
         ]
+    }
+
+    // MARK: Setup
+
+    /// Every grant on one screen. It floats so Perch can be dragged from it into a list in Settings.
+    private func showSetup() {
+        hidePanel()
+        if setup == nil {
+            let host = NSHostingView(rootView: SetupView(permissions: permissions) { [unowned self] in setup?.close() })
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+                                  styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host
+            window.delegate = self
+            window.center()
+            setup = window
+        }
+        NSApp.activate()
+        setup?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Closing setup, by Later, Done or its close button, stops it opening at launch while Full Disk Access is on.
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === setup else { return }
+        UserDefaults.standard.set(true, forKey: "setUp")
+        setup = nil  // its view's refresh loop ends with it
     }
 
     // MARK: Panel

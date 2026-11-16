@@ -11,7 +11,7 @@ struct PanelRoot: View {
     var body: some View {
         Group {
             if store.needsAccess {
-                AccessView()
+                AccessView(store: store)
             } else if let error = store.readError {
                 ContentUnavailableView("Can't read Messages", systemImage: "exclamationmark.bubble", description: Text(error))
             } else if let chat = store.panelChat {
@@ -110,15 +110,15 @@ struct ChatMenu: View {
 }
 
 struct AccessView: View {
+    let store: Store
+
     var body: some View {
         ContentUnavailableView {
             Label("Full Disk Access", systemImage: "lock")
         } description: {
             Text("Perch reads your conversations from Messages.")
         } actions: {
-            Button("Open Settings") {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-            }
+            Button("Set Up Perch", action: store.showSetup)
         }
     }
 }

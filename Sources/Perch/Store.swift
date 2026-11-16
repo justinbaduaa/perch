@@ -54,6 +54,7 @@ struct Pending: Identifiable {
     /// Set by the app delegate, which owns the panel.
     @ObservationIgnored var showPanel: (Chat) -> Void = { _ in }
     @ObservationIgnored var hidePanel: () -> Void = {}
+    @ObservationIgnored var showSetup: () -> Void = {}
 
     @ObservationIgnored private var db: MessagesDB?
     /// chat.db's newest row, unread count and receipts on my recent messages at the last poll; any change reloads.
