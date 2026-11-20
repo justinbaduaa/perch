@@ -20,6 +20,8 @@ final class AvatarStrip {
     private var liftedAt: Date?  // when the avatars last left the item for the floating window
     private static let handover: TimeInterval = 0.05
     private(set) var hovered: Int?
+    /// The face a file drag is over, which spreads the strip and rings it as if open.
+    var dropTarget: Int? { didSet { if dropTarget != oldValue { update() } } }
     private var inside = false
     private let store: Store
     private var xs: [CGFloat] = []  // drawn x of each slot, eased toward the layout
@@ -30,12 +32,12 @@ final class AvatarStrip {
     var bar: [Chat] { store.barChats }
     var moreSlot: Int? { store.chats.count > bar.count ? bar.count : nil }
     private var slots: Int { bar.count + (moreSlot == nil ? 0 : 1) }
-    private var spread: Bool { inside || store.panelShown }
+    private var spread: Bool { inside || store.panelShown || dropTarget != nil }
 
     /// Where `chat` lives in the strip: its avatar, or "•••" for a chat beyond the bar.
     func slot(of chat: Chat) -> Int? { bar.firstIndex { $0.id == chat.id } ?? moreSlot }
 
-    private var openSlot: Int? { store.panelShown ? store.panelChat.flatMap(slot) ?? moreSlot : nil }
+    private var openSlot: Int? { dropTarget ?? (store.panelShown ? store.panelChat.flatMap(slot) ?? moreSlot : nil) }
 
     /// x of each slot across the spread width: side by side when spread, overlapping and centred at rest, so the stack
     /// opens out from the item's centre.

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var setup: NSWindow?
     private lazy var strip = AvatarStrip(store: store)
     private lazy var panel = makePanel()
+    private lazy var dropZone = DropZone(strip: strip, store: store)
     private let pill = AppDelegate.floatingPanel()
     private var mouseDownAt = NSPoint.zero
     /// Whether that press came while a modal of ours was up. The file picker is one: macOS draws it in another
@@ -54,6 +55,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // The status button is drawn outside this process, so tracking areas on it never fire; watch the pointer instead.
         NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [unowned self] _ in pointerMoved() }
         NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [unowned self] event in pointerMoved(); return event }
+
+        // A file dragged in another app toward the faces brings up the drop pill.
+        dropZone.onTarget = { [unowned self] slot in strip.dropTarget = slot }
+        dropZone.onDrop = { [unowned self] slot, files in
+            let chat = strip.bar[slot]
+            store.stage(files, for: chat.id)  // into the message box; Send sends
+            show(chat, under: slot)
+        }
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged]) { [unowned self] event in
+            if event.type == .leftMouseDown { dropZone.pressed() } else { dropZone.dragged() }
+        }
 
         // Close on a click elsewhere, but not on a drag: dragging files in from Finder is how you drop them.
         // Nor on a click in the file picker. Clicks on the strip arrive here too (another process draws it);
