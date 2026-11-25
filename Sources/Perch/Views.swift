@@ -1046,6 +1046,7 @@ struct Avatar: View {
     let name: String
     var size: CGFloat = 28
     var cornerRadius: CGFloat?
+    @Environment(\.colorScheme) private var scheme
     /// A group without a picture shows up to four of its members, clustered as in Messages.
     var members: [Member] = []
 
@@ -1068,7 +1069,7 @@ struct Avatar: View {
                 Image(nsImage: image).resizable().scaledToFill()
             } else if members.count > 1 {
                 ZStack {
-                    Rectangle().fill(.gray.opacity(0.25))
+                    Rectangle().fill(Color(nsColor: NSColor(white: scheme == .dark ? 0.3 : 0.82, alpha: 1)))  // solid, as Color.solidBlue
                     ForEach(Array(zip(members, Self.clusters[members.count - 2]).enumerated()), id: \.offset) { _, face in
                         Avatar(image: face.0.image, name: face.0.name, size: size * face.1.d)
                             .position(x: size * face.1.x, y: size * face.1.y)
