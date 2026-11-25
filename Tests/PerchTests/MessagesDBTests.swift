@@ -20,13 +20,17 @@ import Testing
         "title": "Cobalt", "siteName": "American Express", "URL": NSURL(string: "https://americanexpress.com/x")!,
         "image": ["richLinkImageAttachmentSubstituteIndex": 0],
     ]] as NSDictionary, requiringSecureCoding: false).map { String(format: "%02x", $0) }.joined()
+    // A group's picture, as Messages names it in the chat's properties.
+    let properties = try PropertyListSerialization.data(fromPropertyList: ["groupPhotoGuid": "GP1"], format: .binary, options: 0)
+        .map { String(format: "%02x", $0) }.joined()
 
     let path = dir.appending(path: "chat.db").path
     var db: OpaquePointer?
     sqlite3_open(path, &db)
     let sql = """
         CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT, group_id TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT, group_id TEXT,
+          properties BLOB);
         CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
         CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
           date INTEGER, is_from_me INTEGER, item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0,
@@ -34,11 +38,12 @@ import Testing
           thread_originator_guid TEXT, balloon_bundle_id TEXT, payload_data BLOB, is_sent INTEGER DEFAULT 0,
           is_delivered INTEGER DEFAULT 0, date_read INTEGER DEFAULT 0, error INTEGER DEFAULT 0);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
-        CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT);
+        CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT, guid TEXT);
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
 
         INSERT INTO handle VALUES (1, '+15551234567');
-        INSERT INTO chat VALUES (1, 'any;-;+15551234567', '+15551234567', '', 'U1'), (2, 'any;+;chat9', 'chat9', 'Team', 'U2');
+        INSERT INTO chat VALUES (1, 'any;-;+15551234567', '+15551234567', '', 'U1', NULL),
+          (2, 'any;+;chat9', 'chat9', 'Team', 'U2', X'\(properties)');
         INSERT INTO chat_handle_join VALUES (1, 1), (2, 1);
         INSERT INTO message (ROWID, guid, text, attributedBody, handle_id, date, is_from_me, item_type,
                              associated_message_type, associated_message_guid) VALUES
@@ -55,8 +60,8 @@ import Testing
         INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me, is_read, balloon_bundle_id, payload_data)
           VALUES (10, 'L', 'https://americanexpress.com/x', 1, 400, 0, 1, 'com.apple.messages.URLBalloonProvider', X'\(payload)');
         INSERT INTO chat_message_join VALUES (2, 9, 500), (2, 10, 400);
-        INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg'), (2, '/nope/gone.jpg', 'image/jpeg'),
-          (3, '\(preview.path)', NULL);
+        INSERT INTO attachment VALUES (1, '\(photo.path)', 'image/jpeg', 'P1'), (2, '/nope/gone.jpg', 'image/jpeg', 'P2'),
+          (3, '\(preview.path)', NULL, 'P3'), (4, '~/Library/Messages/Attachments/gp.jpeg', 'image/jpeg', 'GP1');
         INSERT INTO message_attachment_join VALUES (3, 1), (8, 2), (10, 3);
         UPDATE message SET thread_originator_guid = 'A' WHERE ROWID = 3;
         UPDATE message SET is_read = 1 WHERE ROWID IN (1, 3);
@@ -71,6 +76,7 @@ import Testing
     #expect(chats.first?.handles == ["+15551234567"])
     #expect(chats.map(\.unread) == [8, 9])  // their unread D came after my last message (R2)
     #expect(chats.map(\.isGroup) == [false, true])
+    #expect(chats.map(\.photo?.path) == [nil, NSHomeDirectory() + "/Library/Messages/Attachments/gp.jpeg"])
 
     let rows = try await messages.messages(chat: 1)
     #expect(rows.map(\.text) == ["hello", "from attributedBody", ""])

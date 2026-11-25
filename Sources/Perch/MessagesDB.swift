@@ -14,6 +14,8 @@ nonisolated struct Chat: Identifiable, Hashable {
     var lastActive = Date.distantPast
     /// ROWID of their newest unread message, unless I've written since, which means I read it.
     var unread: Int64?
+    /// A group's own picture, set in Messages.
+    var photo: URL?
 
     var isGroup: Bool { guid.contains(";+;") }
     /// The other person in a one-to-one chat. A group down to one other member is still a group.
@@ -103,6 +105,7 @@ actor MessagesDB {
     /// newest by walking each chat back from its end: a MAX over each chat's messages took 250 ms on 300k messages.
     func chats() throws -> [Chat] {
         var out: [Chat] = []
+        var photos: [(chat: Int, guid: String)] = []
         try query("""
             WITH top AS (
               SELECT c.ROWID AS id, c.guid, c.chat_identifier, c.display_name, c.group_id, MAX(cmj.message_date) AS last
@@ -118,7 +121,8 @@ actor MessagesDB {
                  JOIN handle h ON h.ROWID = j.handle_id WHERE j.chat_id = top.id),
               last, group_id, unread.row,
               (SELECT j.message_id FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
-                 WHERE j.chat_id = top.id AND m.is_from_me = 1 ORDER BY j.message_id DESC LIMIT 1)
+                 WHERE j.chat_id = top.id AND m.is_from_me = 1 ORDER BY j.message_id DESC LIMIT 1),
+              (SELECT properties FROM chat WHERE ROWID = top.id)
             FROM top LEFT JOIN unread ON unread.chat_id = top.id ORDER BY last DESC
             """) { r in
             let unread = r.int(7), mine = r.int(8)  // 0 when there is none
@@ -129,6 +133,17 @@ actor MessagesDB {
                 groupID: r.text(6),
                 lastActive: appleDate(r.int(5)),
                 unread: unread > mine ? unread : nil))
+            // A group's picture is an attachment, named by `groupPhotoGuid` in the chat's properties plist.
+            if out[out.count - 1].isGroup, let data = r.data(9),
+               let properties = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+               let guid = properties["groupPhotoGuid"] as? String {
+                photos.append((out.count - 1, guid))
+            }
+        }
+        for (i, guid) in photos {
+            try query("SELECT filename FROM attachment WHERE guid = ?", guid) { r in
+                out[i].photo = r.text(0).map { URL(filePath: ($0 as NSString).expandingTildeInPath) }
+            }
         }
         return out
     }
@@ -213,13 +228,13 @@ actor MessagesDB {
         return rows.filter { !$0.text.isEmpty || !$0.attachments.isEmpty }
     }
 
-    private func query(_ sql: String, _ args: Int64..., row: (Row) -> Void) throws {
+    private func query(_ sql: String, _ args: any Bindable..., row: (Row) -> Void) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
             throw DBError(message: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
-        for (i, arg) in args.enumerated() { sqlite3_bind_int64(stmt, Int32(i + 1), arg) }
+        for (i, arg) in args.enumerated() { arg.bind(stmt, Int32(i + 1)) }
         while true {
             switch sqlite3_step(stmt) {
             case SQLITE_ROW: row(Row(stmt: stmt))
@@ -227,6 +242,15 @@ actor MessagesDB {
             default: throw DBError(message: String(cString: sqlite3_errmsg(db)))
             }
         }
+    }
+}
+
+/// What a `?` in a query can stand for.
+nonisolated private protocol Bindable { func bind(_ stmt: OpaquePointer, _ index: Int32) }
+extension Int64: Bindable { func bind(_ stmt: OpaquePointer, _ index: Int32) { sqlite3_bind_int64(stmt, index, self) } }
+extension String: Bindable {
+    func bind(_ stmt: OpaquePointer, _ index: Int32) {
+        sqlite3_bind_text(stmt, index, self, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))  // SQLITE_TRANSIENT: sqlite copies it
     }
 }
 

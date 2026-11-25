@@ -71,6 +71,8 @@ struct Pending: Identifiable {
     @ObservationIgnored private var lastMark: Int64?
     /// The mark each thread was loaded at.
     @ObservationIgnored private var loadedAt: [Int64: Int64] = [:]
+    /// Group pictures as avatar-sized thumbnails; nil for one that won't load.
+    @ObservationIgnored private var groupPhotos: [URL: NSImage?] = [:]
     @ObservationIgnored private var nextPendingID: Int64 = -1
     /// The latest send. Each waits for the one before, so they go out in the order they were sent, as in Messages.
     @ObservationIgnored private var lastSend: Task<Bool, Never>?
@@ -206,7 +208,27 @@ struct Pending: Identifiable {
 
     func shortName(_ chat: Chat) -> String { chat.person.map(contacts.shortName) ?? name(chat) }
 
-    func photo(_ chat: Chat) -> NSImage? { chat.person.flatMap(contacts.photo) }
+    /// Their contact photo, or a group's own picture.
+    func photo(_ chat: Chat) -> NSImage? {
+        if let person = chat.person { return contacts.photo(person) }
+        guard let url = chat.photo else { return nil }
+        if let cached = groupPhotos[url] { return cached }
+        // Group pictures are full-size photos; an avatar needs a small one, decoded once.
+        let options = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 160,
+                       kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary
+        let image = CGImageSourceCreateWithURL(url as CFURL, nil)
+            .flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, options) }
+            .map { NSImage(cgImage: $0, size: .zero) }
+        groupPhotos[url] = image
+        return image
+    }
+
+    /// A group's members for its cluster of faces, those with photos first, as Messages shows them.
+    func members(_ chat: Chat) -> [Avatar.Member] {
+        guard chat.isGroup else { return [] }
+        let all = chat.handles.map { Avatar.Member(image: contacts.photo($0), name: contacts.name($0)) }
+        return Array((all.filter { $0.image != nil } + all.filter { $0.image == nil }).prefix(4))
+    }
 
     /// Opens the thread in Messages, out from under the panel.
     func openInMessages(_ chat: Chat) {

@@ -171,12 +171,12 @@ final class AvatarStrip {
         let faces = bar.enumerated().map { i, chat in
             // Red while recording for them, white for the open chat, blue for something unread.
             let ring: Color? = i == recording ? .red : i == open ? .primary : store.isUnread(chat) ? .blue : nil
-            return (chat: chat, photo: store.photo(chat), name: store.name(chat), ring: ring)
+            return (chat: chat, photo: store.photo(chat), name: store.name(chat), members: store.members(chat), ring: ring)
         }
         let strip = ZStack(alignment: .leading) {
             ForEach(Array(faces.enumerated()), id: \.element.chat.id) { i, face in
                 let ring = face.ring
-                Avatar(image: face.photo, name: face.name, size: size, cornerRadius: Self.corner)
+                Avatar(image: face.photo, name: face.name, size: size, cornerRadius: Self.corner, members: face.members)
                     .overlay { shape.strokeBorder(ring ?? rim, lineWidth: ring == nil ? 1 : 1.5) }
                     .offset(x: xs[i])
                     .zIndex(Double(bar.count - i))

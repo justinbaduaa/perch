@@ -57,7 +57,7 @@ struct PeopleView: View {
                     ForEach(matches) { chat in
                         Button { open(chat) } label: {
                             HStack(spacing: 10) {
-                                Avatar(image: store.photo(chat), name: store.name(chat), size: 28)
+                                Avatar(image: store.photo(chat), name: store.name(chat), size: 28, members: store.members(chat))
                                 Text(store.name(chat)).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if store.pins.contains(chat.guid) {
@@ -309,7 +309,7 @@ struct ConversationView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Avatar(image: store.photo(chat), name: store.name(chat), size: 32)
+            Avatar(image: store.photo(chat), name: store.name(chat), size: 32, members: store.members(chat))
             VStack(alignment: .leading, spacing: 1) {
                 Text(store.name(chat)).font(.headline).lineLimit(1)
                 if let last = messages.last {  // iMessage has no online status, so this is the only "when"
@@ -1046,11 +1046,33 @@ struct Avatar: View {
     let name: String
     var size: CGFloat = 28
     var cornerRadius: CGFloat?
+    /// A group without a picture shows up to four of its members, clustered as in Messages.
+    var members: [Member] = []
+
+    struct Member {
+        let image: NSImage?
+        let name: String
+    }
+
+    /// Where each member's face sits in the cluster, as fractions of the avatar: centre x, centre y, diameter.
+    private static let clusters: [[(x: CGFloat, y: CGFloat, d: CGFloat)]] = [
+        [(0.36, 0.36, 0.56), (0.66, 0.66, 0.52)],
+        [(0.5, 0.29, 0.46), (0.29, 0.68, 0.44), (0.71, 0.68, 0.44)],
+        [(0.40, 0.33, 0.46), (0.78, 0.27, 0.26), (0.73, 0.63, 0.40), (0.38, 0.75, 0.38)],
+    ]
 
     var body: some View {
         Group {
             if let image {
                 Image(nsImage: image).resizable().scaledToFill()
+            } else if members.count > 1 {
+                ZStack {
+                    Rectangle().fill(.gray.opacity(0.25))
+                    ForEach(Array(zip(members, Self.clusters[members.count - 2]).enumerated()), id: \.offset) { _, face in
+                        Avatar(image: face.0.image, name: face.0.name, size: size * face.1.d)
+                            .position(x: size * face.1.x, y: size * face.1.y)
+                    }
+                }
             } else {
                 let initials = name.split(separator: " ").prefix(2).compactMap { $0.first(where: \.isLetter) }
                 ZStack {
