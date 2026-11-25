@@ -143,9 +143,10 @@ struct ConversationView: View {
     @State private var swipe: Swipe?
     @State private var rows = RowFrames()
     @State private var monitor: Any?
-    @State private var position = ScrollPosition(edge: .bottom)
     /// Scrolled up past the newest message, so See more shows.
     @State private var above = false
+    /// The id of the marker after the last row: what "the newest message" scrolls to.
+    private static let end = "end"
 
     /// A two-finger swipe on one message: finger travel so far, and whether it turned out sideways.
     private struct Swipe {
@@ -170,9 +171,10 @@ struct ConversationView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            ScrollViewReader { proxy in
             ScrollView {
                 // Every row laid out up front: a lazy stack guesses unseen heights and drops rows' pictures as they
-                // scroll away, so the thread jumped near the top. A thread is `MessagesDB.threadLength` messages at most.
+                // scroll away, so the thread jumped near the top. A thread opens with `MessagesDB.threadLength` messages.
                 VStack(spacing: 6) {
                     ForEach(Array(messages.enumerated()), id: \.element.id) { i, m in
                         if i == 0 || m.date.timeIntervalSince(messages[i - 1].date) > 3600 {
@@ -194,30 +196,34 @@ struct ConversationView: View {
                                    receipt: p.id == waiting.last?.id ? .sending : nil, isPending: true)
                             .transition(.scale(scale: 0.9, anchor: .bottomTrailing).combined(with: .opacity))
                     }
+                    Color.clear.frame(height: 2).id(Self.end)
                 }
                 .padding(.horizontal, 12)
-                .padding(.bottom, 8)
             }
             .defaultScrollAnchor(.bottom)
             // Rows only ever add at the end, so a fixed top anchor keeps what you're reading still; at the newest
             // message, the fold below follows them down. Changing the anchor live made SwiftUI jump to the bottom.
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .scrollIndicators(.never)
-            .scrollPosition($position)
             .onScrollGeometryChange(for: Fold.self) {
                 Fold(below: $0.contentSize.height - ($0.visibleRect.maxY - $0.contentInsets.bottom),
                      height: $0.contentSize.height, composer: $0.contentInsets.bottom)
             } action: { old, new in
-                if (new.height != old.height || new.composer != old.composer) && old.below < 40 {
-                    position.scrollTo(edge: .bottom)  // at the newest message: stay there as messages land or the box resizes
-                } else {
-                    above = new.below > 40
-                }
+                // At the newest message: stay there as messages land or the box resizes. Scrolled on the next turn,
+                // since a scroll set from inside this layout callback can be dropped.
+                let follow = (new.height != old.height || new.composer != old.composer) && old.below < 40
+                if follow { Task { proxy.scrollTo(Self.end, anchor: .bottom) } }
+                above = !follow && new.below > 40
+            }
+            // Opening the panel, or sending, lands on the newest message, as in Messages.
+            .onChange(of: store.panelShown) { if store.panelShown { proxy.scrollTo(Self.end, anchor: .bottom) } }
+            .onChange(of: waiting.count) { old, new in
+                if new > old { withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(Self.end, anchor: .bottom) } }
             }
             .overlay(alignment: .bottom) {
                 ZStack { if above {
                     Button {
-                        withAnimation(.smooth(duration: 0.35)) { position.scrollTo(edge: .bottom) }
+                        withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo(Self.end, anchor: .bottom) }
                     } label: {
                         HStack(spacing: 6) { Text("See more"); Image(systemName: "chevron.down") }
                             .font(.callout.weight(.semibold)).foregroundStyle(.white)
@@ -232,6 +238,7 @@ struct ConversationView: View {
             }
             // The thread runs on under the message box, whose glass blurs it, as in Messages.
             .safeAreaInset(edge: .bottom, spacing: 0) { Composer(store: store, chat: chat, replying: $replying) }
+            }
         }
         .overlay {
             if dropping {
