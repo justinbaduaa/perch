@@ -161,6 +161,9 @@ struct ConversationView: View {
         var shown: CGFloat { (pull <= replyReach ? pull : replyReach + (pull - replyReach) * 0.25) * way }
     }
 
+    /// How far the newest message sits below what shows, and the height of the message box over the thread.
+    private struct Fold: Equatable { var below: CGFloat, composer: CGFloat }
+
     /// Where each message row sits in the panel. A plain object, so scrolling doesn't re-render the thread.
     private final class RowFrames { var byGuid: [String: CGRect] = [:] }
 
@@ -199,7 +202,15 @@ struct ConversationView: View {
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .scrollIndicators(.never)
             .scrollPosition($position)
-            .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 40 } action: { above = $1 }
+            .onScrollGeometryChange(for: Fold.self) {
+                Fold(below: $0.contentSize.height - ($0.visibleRect.maxY - $0.contentInsets.bottom), composer: $0.contentInsets.bottom)
+            } action: { old, new in
+                if new.composer != old.composer && old.below < 40 {
+                    position.scrollTo(edge: .bottom)  // the message box grew or shrank: the newest message stays above it
+                } else {
+                    above = new.below > 40
+                }
+            }
             .overlay(alignment: .bottom) {
                 ZStack { if above {
                     Button {
@@ -216,7 +227,8 @@ struct ConversationView: View {
                 } }
                 .animation(.smooth(duration: 0.2), value: above)
             }
-            Composer(store: store, chat: chat, replying: $replying)
+            // The thread runs on under the message box, whose glass blurs it, as in Messages.
+            .safeAreaInset(edge: .bottom, spacing: 0) { Composer(store: store, chat: chat, replying: $replying) }
         }
         .overlay {
             if dropping {
@@ -816,7 +828,7 @@ struct Composer: View {
             }
         }
         .padding(12)
-        .background(.quaternary, in: .rect(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular, in: .rect(cornerRadius: 18, style: .continuous))  // blurs the thread behind it
         .padding(10)
         .animation(.smooth(duration: 0.2), value: replying?.guid)
         .onChange(of: replying?.guid) { if replying != nil { focused = true } }
