@@ -143,6 +143,9 @@ struct ConversationView: View {
     @State private var swipe: Swipe?
     @State private var rows = RowFrames()
     @State private var monitor: Any?
+    @State private var position = ScrollPosition(edge: .bottom)
+    /// Scrolled up past the newest message, so See more shows.
+    @State private var above = false
 
     /// A two-finger swipe on one message: finger travel so far, and whether it turned out sideways.
     private struct Swipe {
@@ -195,6 +198,24 @@ struct ConversationView: View {
             .defaultScrollAnchor(.bottom)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .scrollIndicators(.never)
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 40 } action: { above = $1 }
+            .overlay(alignment: .bottom) {
+                ZStack { if above {
+                    Button {
+                        withAnimation(.smooth(duration: 0.35)) { position.scrollTo(edge: .bottom) }
+                    } label: {
+                        HStack(spacing: 6) { Text("See more"); Image(systemName: "chevron.down") }
+                            .font(.callout.weight(.semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(Color.blue, in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                } }
+                .animation(.smooth(duration: 0.2), value: above)
+            }
             Composer(store: store, chat: chat, replying: $replying)
         }
         .overlay {

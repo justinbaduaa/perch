@@ -39,6 +39,7 @@ GitHub then builds Perch, runs the tests and publishes Perch.dmg as that version
 - Dropped files, pasted files and pictures (⌘V), the paperclip and finished screen recordings wait in the message box with an × each; Send sends them, then your text.
 - The waveform button records a voice note, with a live waveform: Send stops and sends it, × throws it away.
 - The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
+- Scrolled up in a thread, a blue See more button sits above the message box; click it to scroll back down to the newest message.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.
 - Links show as cards with the page's picture, title and site, read from the preview Messages saved, so Perch fetches nothing itself. Click one to open it.
 - Reactions sit in circles on the bubble's top corner, yours in blue.
