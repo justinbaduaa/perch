@@ -26,8 +26,13 @@ nonisolated enum HiddenMessages {
 
     struct Failure: LocalizedError { let errorDescription: String? }
 
-    /// Built once, on first use: platform-imessage allows one per process.
-    nonisolated(unsafe) private static let api = Result { try PlatformAPI(accountID: "perch") }
+    /// Built once, on first use: platform-imessage allows one per process. Secondary-instance mode makes it launch its
+    /// own hidden copy of Messages; its default drives yours, opening the chat there with a link, and its window popped
+    /// up on every reaction and reply.
+    nonisolated(unsafe) private static let api = Result { () throws -> PlatformAPI in
+        IMessageHost.useSecondaryMessagesInstance = true
+        return try PlatformAPI(accountID: "perch")
+    }
 
     static func react(_ emoji: String, on: Bool, message: String, chat: String) async throws {
         guard let api = try ready(to: "react") else { return }
