@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v26)],
     dependencies: [
         // Beeper's iMessage automation: tapbacks, which have no public API, through a hidden copy of Messages.
-        .package(url: "https://github.com/beeper/platform-imessage.git", exact: "0.25.6"),
+        .package(url: "https://github.com/beeper/platform-imessage.git", exact: "0.26.0"),
     ],
     targets: [
         .executableTarget(

@@ -1,13 +1,13 @@
 {
-  "originHash" : "9bd42ec46fc3ceeecc6a5011a33d8a239b12462f00e4946759cb48d9c528261a",
+  "originHash" : "dbe82a73219f6d21de625189caf0b769a02f983d1fe1024397164e7b1a6b25d6",
   "pins" : [
     {
       "identity" : "betterswiftax",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/beeper/BetterSwiftAX.git",
       "state" : {
-        "revision" : "6c1c20fcd70d0a6718bfde30c0c7937b5a62d6a0",
-        "version" : "0.1.3"
+        "revision" : "f036ed42c73a87010f63fb3acc981542eca8f214",
+        "version" : "0.3.0"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/beeper/platform-imessage.git",
       "state" : {
-        "revision" : "1c6ba875ca338ed342b0e7f0ad38561f5032e5bc",
-        "version" : "0.25.6"
+        "revision" : "ee3319f4a6d973a7bdaaa2198a1cf8aa0ca2a9f9",
+        "version" : "0.26.0"
       }
     },
     {
