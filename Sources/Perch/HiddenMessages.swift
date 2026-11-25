@@ -1,8 +1,8 @@
 import ApplicationServices
 import IMessage
 
-/// Tapbacks, threaded replies and conversation actions, which Messages' AppleScript can't do. Beeper's platform-imessage drives a hidden
-/// second copy of Messages through Accessibility, so your own Messages window never moves; Perch needs Accessibility.
+/// Tapbacks, threaded replies and conversation actions, which Messages' AppleScript can't do. Beeper's platform-imessage drives
+/// Messages through Accessibility, its window parked on a hidden Space meanwhile; Perch needs Accessibility.
 nonisolated enum HiddenMessages {
     /// The six classic tapbacks, in chat.db's order (type 2000 is the first), and as platform-imessage names them.
     static let tapbacks: [(emoji: String, key: String)] = [
@@ -26,11 +26,12 @@ nonisolated enum HiddenMessages {
 
     struct Failure: LocalizedError { let errorDescription: String? }
 
-    /// Built once, on first use: platform-imessage allows one per process. Secondary-instance mode makes it launch its
-    /// own hidden copy of Messages; its default drives yours, opening the chat there with a link, and its window popped
-    /// up on every reaction and reply.
+    /// Built once, on first use: platform-imessage allows one per process. `bootstrap` registers its defaults, as Beeper
+    /// does: window coordination keeps Messages' window on a hidden Space while it works (without it the window popped up
+    /// on every reaction), plus misfire prevention. Its secondary-instance mode, a second hidden Messages, failed and
+    /// cost 360 MB.
     nonisolated(unsafe) private static let api = Result { () throws -> PlatformAPI in
-        IMessageHost.useSecondaryMessagesInstance = true
+        IMessageHost.bootstrap()
         return try PlatformAPI(accountID: "perch")
     }
 

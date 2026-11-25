@@ -199,7 +199,7 @@ struct Pending: Identifiable {
                 undo()
                 let alert = NSAlert()
                 alert.messageText = "Messages didn't make the change"
-                alert.informativeText = error.localizedDescription
+                alert.informativeText = error.sentence
                 alert.runModal()
             }
         }
@@ -272,7 +272,7 @@ struct Pending: Identifiable {
             }
             return true
         } catch {
-            sendError = error.localizedDescription
+            sendError = error.sentence
             withAnimation(.smooth) { pending.removeAll { $0.id == p.id } }
             return false
         }
@@ -310,7 +310,7 @@ struct Pending: Identifiable {
                 try? await Task.sleep(for: .seconds(30))  // chat.db shows it long before; if it never does, show what it says
                 if tapbacks[message.guid] == .some(on ? emoji : nil) { withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) } }
             } catch {
-                sendError = error.localizedDescription
+                sendError = error.sentence
                 withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) }
             }
         }
@@ -343,7 +343,7 @@ struct Pending: Identifiable {
                 sendError = nil
                 if kind == .screen { hidePanel() }
             } catch {
-                sendError = error.localizedDescription
+                sendError = error.sentence
             }
         }
     }
@@ -387,4 +387,10 @@ struct Pending: Identifiable {
             readError = needsAccess ? nil : "\(error)"
         }
     }
+}
+
+extension Error {
+    /// What to show for a failure: Perch's own errors read as sentences; platform-imessage's read like log lines (it logs
+    /// them itself).
+    var sentence: String { (self as? LocalizedError)?.errorDescription ?? "Messages didn't respond. Try again." }
 }
