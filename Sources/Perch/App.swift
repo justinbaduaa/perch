@@ -260,6 +260,12 @@ extension NSColor {
     static let panelShade = NSColor.black.withAlphaComponent(0.3)
 }
 
+extension Color {
+    /// Solid blue on the panel's glass. The glass blends SwiftUI's own `.blue` with what's behind it, which turns
+    /// it a pale cyan; a color made from an NSColor draws as is.
+    static let solidBlue = Color(nsColor: .systemBlue)
+}
+
 extension CAMediaTimingFunction {
     /// Fast out of the gate, settling softly: things that open many times a day.
     static let strongEaseOut = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)

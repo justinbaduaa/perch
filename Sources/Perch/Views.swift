@@ -208,7 +208,7 @@ struct ConversationView: View {
                         HStack(spacing: 6) { Text("See more"); Image(systemName: "chevron.down") }
                             .font(.callout.weight(.semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(Color.blue, in: .capsule)
+                            .background(Color.solidBlue, in: .capsule)
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
@@ -388,7 +388,7 @@ struct MessageRow: View, Equatable {
                         ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
                             Text(badge.emoji).font(.system(size: 11))
                                 .frame(width: 22, height: 22)
-                                .background(badge.mine ? Color.blue : Color(white: 0.4), in: .circle)
+                                .background(badge.mine ? Color.solidBlue : Color(white: 0.4), in: .circle)
                                 .transition(.scale.combined(with: .opacity))
                         }
                     }
