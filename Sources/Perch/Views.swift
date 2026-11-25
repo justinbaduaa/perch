@@ -783,7 +783,9 @@ struct Composer: View {
             } else {
                 TextField(placeholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...5)
+                    // One line while empty: a group's long "Note to…" or "Switch to…" is cut short instead of
+                    // wrapping, which grew the box and moved the thread each time the pointer crossed a face.
+                    .lineLimit(draft.isEmpty ? 1...1 : 1...5)
                     .focused($focused)
                     .onSubmit(sendAll)
                     .onKeyPress(.escape) {  // Esc drops the reply first, then closes the panel
