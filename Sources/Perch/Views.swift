@@ -814,7 +814,7 @@ struct Composer: View {
                     .textFieldStyle(.plain)
                     // One line while empty: a group's long "Note to…" or "Switch to…" is cut short instead of
                     // wrapping, which grew the box and moved the thread each time the pointer crossed a face.
-                    .lineLimit(draft.isEmpty ? 1...1 : 1...5)
+                    .lineLimit(draft.isEmpty ? 1 : 5)  // a cap, not a 1...1 range, which SwiftUI faulted on 100 times an hour
                     .focused($focused)
                     .onSubmit(sendAll)
                     .onKeyPress(.escape) {  // Esc drops the reply first, then closes the panel
