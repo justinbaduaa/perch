@@ -9,22 +9,19 @@ enum MessagesApp {
         }
     }
 
-    /// A fixture database has no Messages behind it, so with PERCH_DB set a send only pretends.
-    private static let dryRun = ProcessInfo.processInfo.environment["PERCH_DB"] != nil
-
     static func send(text: String, to chat: Chat) async throws {
-        if dryRun { return try await Task.sleep(for: .milliseconds(700)) }
+        if MessagesDB.isFixture { return try await Task.sleep(for: .milliseconds(700)) }
         try await run(chat, kind: "text", payload: text)
     }
 
     static func send(file: URL, to chat: Chat) async throws {
-        if dryRun { return try await Task.sleep(for: .milliseconds(700)) }
+        if MessagesDB.isFixture { return try await Task.sleep(for: .milliseconds(700)) }
         try await run(chat, kind: "file", payload: stage(file).path)
     }
 
     /// Opens the thread in Messages. A group needs Messages' own `imessage://open?groupid=` link.
     static func open(_ chat: Chat) {
-        let link = chat.isGroup ? "imessage://open?groupid=\(chat.identifier)" : "sms:\(chat.handles.first ?? chat.identifier)"
+        let link = chat.isGroup ? "imessage://open?groupid=\(chat.identifier)" : "sms:\(chat.person ?? chat.identifier)"
         NSWorkspace.shared.open(URL(string: link) ?? URL(filePath: "/System/Applications/Messages.app"))
     }
 
@@ -46,7 +43,7 @@ enum MessagesApp {
         """
 
     private static func run(_ chat: Chat, kind: String, payload: String) async throws {
-        let handle = chat.handles.count == 1 ? chat.handles[0] : ""
+        let handle = chat.person ?? ""
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
             let p = Process()
             let stderr = Pipe()

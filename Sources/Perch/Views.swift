@@ -4,9 +4,8 @@ import SwiftUI
 
 /// Contents of the menu bar panel: one conversation, or why there is none.
 struct PanelRoot: View {
+    static let size = CGSize(width: 340, height: 540)
     let store: Store
-    let openInMessages: () -> Void
-    let close: () -> Void
 
     var body: some View {
         Group {
@@ -15,21 +14,21 @@ struct PanelRoot: View {
             } else if let error = store.readError {
                 ContentUnavailableView("Can't read Messages", systemImage: "exclamationmark.bubble", description: Text(error))
             } else if let chat = store.panelChat {
-                ConversationView(store: store, chat: chat, openInMessages: openInMessages)
+                ConversationView(store: store, chat: chat)
                     .id(chat.id)
                     .transition(.blurReplace)
             } else {
                 PeopleView(store: store)
             }
         }
-        .frame(width: 340, height: 540)
+        .frame(width: Self.size.width, height: Self.size.height)
         .coordinateSpace(.named("panel"))  // thumbnails report here, for Quick Look's zoom
         // The window grows from a pill while this blurs in, so pin the content to the top and clip it.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .clipped()
         .blur(radius: store.panelShown ? 0 : 14)
         .opacity(store.panelShown ? 1 : 0)
-        .onExitCommand(perform: close)
+        .onExitCommand(perform: store.hidePanel)
     }
 }
 
@@ -79,17 +78,30 @@ struct PeopleView: View {
             }
             .scrollIndicators(.never)
         }
-        .task(id: store.panelShown) { if store.panelShown { focused = true } }  // as the composer does
+        .task(id: store.panelShown) { if store.panelShown { focused = true } }
     }
 
     private func open(_ chat: Chat) {
-        store.markSeen(chat)
         withAnimation(.smooth(duration: 0.3)) { store.panelChat = chat }
-        store.onChange()  // the strip rings the open chat
     }
 }
 
-/// Messages' menu for a conversation. The strip's right-click menu has the same items (`AppDelegate.chatMenu`).
+/// The strip's right-click menu: the menu of the chat under the pointer, if any, then Perch's own.
+struct StripMenu: View {
+    let store: Store
+    let chat: Chat?
+
+    var body: some View {
+        if let chat {
+            Section(store.name(chat)) { ChatMenu(store: store, chat: chat) }
+            Divider()
+        }
+        Button("Set Up Perch…", action: store.showSetup)
+        Button("Quit Perch") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+
+/// Messages' menu for a conversation, on the strip and in the list behind "•••".
 struct ChatMenu: View {
     let store: Store
     let chat: Chat
@@ -103,7 +115,7 @@ struct ChatMenu: View {
         }
         Button(muted ? "Show Alerts" : "Hide Alerts", systemImage: muted ? "bell" : "bell.slash") { store.setMuted(chat, !muted) }
         Divider()
-        Button("Open in Messages", systemImage: "message") { MessagesApp.open(chat) }
+        Button("Open in Messages", systemImage: "message") { store.openInMessages(chat) }
         Divider()
         Button("Delete…", systemImage: "trash", role: .destructive) { store.confirmDelete(chat) }
     }
@@ -126,8 +138,6 @@ struct AccessView: View {
 struct ConversationView: View {
     let store: Store
     let chat: Chat
-    let openInMessages: () -> Void
-    @State private var messages: [Message] = []
     @State private var dropping = false
     @State private var replying: Message?
     @State private var swipe: Swipe?
@@ -155,9 +165,10 @@ struct ConversationView: View {
         VStack(spacing: 0) {
             header
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(messages.indices, id: \.self) { i in
-                        let m = messages[i]
+                // Every row laid out up front: a lazy stack guesses unseen heights and drops rows' pictures as they
+                // scroll away, so the thread jumped near the top. A thread is `MessagesDB.threadLength` messages at most.
+                VStack(spacing: 6) {
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { i, m in
                         if i == 0 || m.date.timeIntervalSince(messages[i - 1].date) > 3600 {
                             Text(separator.string(from: m.date))
                                 .font(.caption).foregroundStyle(.secondary).padding(.vertical, 6)
@@ -168,7 +179,7 @@ struct ConversationView: View {
                                    quoted: quoted(m), swipe: pull(m),
                                    receipt: next == nil && waiting.isEmpty ? m.receipt : nil,
                                    reply: { replying = m })
-                            .id(m.id)
+                            .equatable()
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { rows.byGuid[m.guid] = $0 }
                             .onDisappear { rows.byGuid[m.guid] = nil }
                     }
@@ -196,16 +207,17 @@ struct ConversationView: View {
             store.stage(urls, for: chat.id)  // into the message box; Send sends
             return true
         } isTargeted: { dropping = $0 }
-        .task(id: "\(chat.id)-\(store.revision)") {
-            messages = store.messages(for: chat)
-            Preview.shared.urls = messages.flatMap { $0.attachments.filter { !$0.isAudio }.map(\.url) }
+        .onChange(of: messages, initial: true) {
+            Preview.shared.urls = messages.flatMap { $0.media.map(\.url) }
         }
         .onAppear { monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { scrolled($0) ? nil : $0 } }
         .onDisappear { monitor.map(NSEvent.removeMonitor) }
     }
 
+    private var messages: [Message] { store.threads[chat.id] ?? [] }
+
     /// My sends in this chat that chat.db doesn't have yet. They show after its rows.
-    private var waiting: [Pending] { store.pending.filter { $0.chatID == chat.id && !$0.landed(in: messages) } }
+    private var waiting: [Pending] { store.pending.filter { $0.chatID == chat.id } }
 
     private func quoted(_ m: Message) -> Message? { m.replyTo.flatMap { guid in messages.first { $0.guid == guid } } }
 
@@ -219,6 +231,7 @@ struct ConversationView: View {
     /// replies, as in Messages. Up and down still scroll. Returns true for the events of a sideways swipe, so the
     /// thread stays put.
     private func scrolled(_ event: NSEvent) -> Bool {
+        guard store.panelChat?.id == chat.id else { return false }  // the chat being switched away from
         if event.phase.isEmpty && event.momentumPhase.isEmpty { return false }  // a mouse wheel
         if event.phase == .began {
             let at = Preview.shared.host.map { $0.convert(event.locationInWindow, from: nil) } ?? .zero
@@ -272,7 +285,7 @@ struct ConversationView: View {
                 }
             }
             Spacer()
-            Button(action: openInMessages) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+            Button { store.openInMessages(chat) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                 .buttonStyle(.plain).foregroundStyle(.secondary).help("Open in Messages")
                 .accessibilityLabel("Open in Messages")
         }
@@ -307,7 +320,8 @@ private func relativeFormatter(_ context: Formatter.Context) -> DateFormatter {
     return f
 }
 
-struct MessageRow: View {
+/// Equatable on what it shows, so a change elsewhere in the thread, or a swipe on another row, skips it.
+struct MessageRow: View, Equatable {
     let store: Store
     let chat: Chat
     let message: Message
@@ -336,8 +350,7 @@ struct MessageRow: View {
                 }
                 VStack(alignment: message.fromMe ? .trailing : .leading, spacing: 4) {
                     ForEach(message.attachments.filter(\.isAudio), id: \.self) { AudioChip(url: $0.url) }
-                    let media = message.attachments.filter { !$0.isAudio }
-                    if !media.isEmpty { MediaGrid(items: media, trailing: message.fromMe) }
+                    if !message.media.isEmpty { MediaGrid(items: message.media, trailing: message.fromMe) }
                     // A bare link shows as its card alone, as in Messages.
                     if !message.text.isEmpty, message.link == nil || message.text.contains(where: \.isWhitespace) {
                         Text(linkified(message.text))
@@ -385,13 +398,17 @@ struct MessageRow: View {
         .padding(.top, badges.isEmpty ? 0 : 10)  // room for the badges above the bubble
     }
 
-    /// My tapback, counting the one on its way.
-    private var mine: String? { store.tapbacks[message.guid] ?? message.mine }
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.message == b.message && a.chat == b.chat && a.showAvatar == b.showAvatar && a.quoted == b.quoted
+            && a.swipe == b.swipe && a.receipt == b.receipt && a.isPending == b.isPending
+    }
+
+    private var mine: String? { store.mine(message) }
 
     /// The row under the six, as in Messages: my custom tapback first, if I have one, then my recent emoji, five in all.
     private var recent: [String] {
         let custom = mine.flatMap { emoji in HiddenMessages.tapbacks.contains { $0.emoji == emoji } ? nil : emoji }
-        return Array(([custom].compactMap(\.self) + HiddenMessages.recentEmoji().filter { $0 != custom }).prefix(5))
+        return Array(([custom].compactMap(\.self) + store.recentEmoji.filter { $0 != custom }).prefix(5))
     }
 
     /// Messages' tapback picker, from a double-click or the menu's smiley: the six, then the recent row and the smiley
@@ -424,7 +441,7 @@ struct MessageRow: View {
         Group {
             if showAvatar {
                 let name = message.fromMe ? store.contacts.me?.name ?? "Me" : message.sender.map(store.contacts.name) ?? ""
-                Avatar(image: store.contacts.photo(message.fromMe ? nil : message.sender ?? ""), name: name, size: 22)
+                Avatar(image: message.fromMe ? store.contacts.myPhoto : message.sender.flatMap(store.contacts.photo), name: name, size: 22)
             } else {
                 Color.clear  // keeps the indent; an empty Group takes no space
             }
@@ -474,16 +491,7 @@ struct MessageRow: View {
             Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(urls) }
         }
         Divider()
-        Menu("Forward to", systemImage: "arrowshape.turn.up.right") {
-            ForEach(store.chats.filter { $0.id != chat.id }.prefix(8)) { target in
-                Button(store.name(target)) {
-                    Task {
-                        if !message.text.isEmpty { await store.send(message.text, to: target) }
-                        for url in urls { await store.send(file: url, to: target) }
-                    }
-                }
-            }
-        }
+        ForwardMenu(store: store, message: message, from: chat)
         Menu("Remind me", systemImage: "bell") {
             let cal = Calendar.current
             Button("In 1 hour") { remind(at: .now.addingTimeInterval(3600)) }
@@ -498,6 +506,26 @@ struct MessageRow: View {
 
     private func remind(at date: Date) {
         Task { await store.remind(message, in: chat, at: date) }
+    }
+}
+
+/// A view of its own, so only it redraws when the chat list changes, not every row whose menu holds it.
+private struct ForwardMenu: View {
+    let store: Store
+    let message: Message
+    let from: Chat
+
+    var body: some View {
+        Menu("Forward to", systemImage: "arrowshape.turn.up.right") {
+            ForEach(store.chats.filter { $0.id != from.id }.prefix(8)) { target in
+                Button(store.name(target)) {
+                    Task {
+                        if !message.text.isEmpty { await store.send(message.text, to: target) }
+                        for url in message.attachments.map(\.url) { await store.send(file: url, to: target) }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -555,9 +583,9 @@ struct MediaGrid: View {
 /// Quick Look thumbnail for any file type. Click zooms it into Quick Look; drag copies the file out.
 struct Thumbnail: View {
     let item: Attachment
-    /// Fits the picture in a `side` square, or crops it to fill `fill`.
-    var side: CGFloat = 220
+    /// Crops the picture to fill this; otherwise it fits in a `side` square.
     var fill: CGSize?
+    private let side: CGFloat = 220
     @State private var image: NSImage?
     @State private var hovering = false
 
@@ -600,6 +628,7 @@ struct AudioChip: View {
     @State private var player: AVAudioPlayer?
     @State private var playing = false
     @State private var bars: [CGFloat] = []
+    @State private var duration: TimeInterval = 0
     /// How far it has played, 0...1. Kept when paused.
     @State private var progress = 0.0
 
@@ -608,7 +637,7 @@ struct AudioChip: View {
             HStack(spacing: 8) {
                 Image(systemName: playing ? "pause.fill" : "play.fill")
                 // Counts up while it plays, as in Messages; shows the length otherwise.
-                Text(Duration.seconds((player?.duration ?? 0) * (playing || progress > 0 ? progress : 1))
+                Text(Duration.seconds(duration * (playing || progress > 0 ? progress : 1))
                     .formatted(.time(pattern: .minuteSecond)))
                     .font(.caption).monospacedDigit()
                 HStack(spacing: 2) {
@@ -626,12 +655,13 @@ struct AudioChip: View {
         .buttonStyle(.plain)
         .accessibilityLabel(playing ? "Pause voice note" : "Play voice note")
         .task {
-            player = try? AVAudioPlayer(contentsOf: url)
+            duration = await Task.detached { [url] in (try? AVAudioFile(forReading: url)).map { Double($0.length) / $0.fileFormat.sampleRate } ?? 0 }.value
             bars = await Task.detached { [url] in waveform(url) }.value
         }
     }
 
     private func toggle() {
+        if player == nil { player = try? AVAudioPlayer(contentsOf: url) }
         guard let player else { return }
         if player.isPlaying { player.pause(); playing = false; return }
         nowPlaying?.stop()
@@ -649,19 +679,25 @@ struct AudioChip: View {
     }
 }
 
-/// RMS loudness in `bins` buckets, normalised to 0...1. Reads at most the first 5 minutes.
-nonisolated func waveform(_ url: URL, bins: Int = 28) -> [CGFloat] {
+/// RMS loudness of the first 5 minutes in 28 buckets, normalised to 0...1. Reads a few thousand frames at a time,
+/// since every voice note in a thread does this when it opens.
+nonisolated func waveform(_ url: URL) -> [CGFloat] {
+    let bins = 28
     guard let file = try? AVAudioFile(forReading: url),
-          let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
-                                        frameCapacity: AVAudioFrameCount(min(file.length, Int64(file.fileFormat.sampleRate * 300)))),
-          (try? file.read(into: buffer)) != nil,
-          let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return [] }
-    let step = max(1, Int(buffer.frameLength) / bins)
-    let rms = (0..<bins).map { b -> Float in
-        let range = (b * step)..<min((b + 1) * step, Int(buffer.frameLength))
-        guard !range.isEmpty else { return 0 }
-        return (range.reduce(Float(0)) { $0 + samples[$1] * samples[$1] } / Float(range.count)).squareRoot()
+          let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096) else { return [] }
+    let total = min(file.length, AVAudioFramePosition(file.processingFormat.sampleRate * 300))
+    var sums = [Float](repeating: 0, count: bins), counts = [Int](repeating: 0, count: bins)
+    var read: AVAudioFramePosition = 0
+    while read < total, (try? file.read(into: buffer, frameCount: AVAudioFrameCount(min(4096, total - read)))) != nil,
+          buffer.frameLength > 0, let samples = buffer.floatChannelData?[0] {
+        for i in 0..<Int(buffer.frameLength) {
+            let b = Int((read + AVAudioFramePosition(i)) * AVAudioFramePosition(bins) / total)
+            sums[b] += samples[i] * samples[i]
+            counts[b] += 1
+        }
+        read += AVAudioFramePosition(buffer.frameLength)
     }
+    let rms = zip(sums, counts).map { $1 == 0 ? 0 : ($0 / Float($1)).squareRoot() }
     let peak = max(rms.max() ?? 0, .leastNonzeroMagnitude)
     return rms.map { CGFloat($0 / peak) }
 }
@@ -741,14 +777,14 @@ struct Composer: View {
                     }
                     .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    tool("xmark", "Discard recording") { recorder.discard(); store.onChange() }
+                    tool("xmark", "Discard recording") { recorder.discard() }
                     if recorder.kind == .voice {
                         sendButton("Send", action: finishRecording)
                     }
                 } else {
                     Group {
-                        tool("waveform", "Record voice") { record(.voice) }
-                        tool("record.circle", "Record screen") { record(.screen) }
+                        tool("waveform", "Record voice") { store.record(.voice, for: chat) }
+                        tool("record.circle", "Record screen") { store.record(.screen, for: chat) }
                     }
                     .disabled(recorder.kind != nil)  // already recording for another chat
                     tool("paperclip", "Attach", action: attach)
@@ -768,7 +804,7 @@ struct Composer: View {
         // ⌘V with files or a picture on the clipboard puts them in the box, as a drop does. Text pastes as usual.
         .onAppear {
             pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard event.window is KeyablePanel, store.panelShown,
+                guard event.window is KeyablePanel, store.panelShown, store.panelChat?.id == chat.id,
                       event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                       event.charactersIgnoringModifiers == "v",
                       let files = Clipboard.pastedFiles() else { return event }
@@ -803,31 +839,9 @@ struct Composer: View {
         focused = true  // for a caption
     }
 
-    private func record(_ kind: Recorder.Kind) {
-        Task {
-            do {
-                try await store.recorder.start(kind, for: chat)
-                store.sendError = nil
-                store.onChange()  // the strip rings the chat being recorded
-                if kind == .screen { store.hidePanel() }  // out of the way of the toolbar and out of the recording
-            } catch {
-                store.sendError = error.localizedDescription
-            }
-        }
-    }
-
-    /// Stops the recording and sends it.
     private func finishRecording() {
-        Task {
-            do {
-                let original = replying
-                replying = nil
-                if let file = try await store.recorder.stop() { await store.send(file: file, to: chat, replyingTo: original) }
-            } catch {
-                store.sendError = error.localizedDescription
-            }
-            store.onChange()
-        }
+        store.finishRecording(to: chat, replyingTo: replying)
+        replying = nil
     }
 
     private func tool(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
@@ -1020,11 +1034,12 @@ struct Avatar: View {
     }
 }
 
+private let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
 /// Makes bare URLs in message text clickable.
 private func linkified(_ text: String) -> AttributedString {
     var out = AttributedString(text)
-    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    for match in detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
+    for match in linkDetector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
         if let range = Range(match.range, in: out), let url = match.url { out[range].link = url }
     }
     return out

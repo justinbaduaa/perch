@@ -4,7 +4,7 @@ import IMessage
 /// Tapbacks, threaded replies and conversation actions, which Messages' AppleScript can't do. Beeper's platform-imessage drives a hidden
 /// second copy of Messages through Accessibility, so your own Messages window never moves; Perch needs Accessibility.
 nonisolated enum HiddenMessages {
-    /// The six classic tapbacks, as chat.db shows them and as platform-imessage names them.
+    /// The six classic tapbacks, in chat.db's order (type 2000 is the first), and as platform-imessage names them.
     static let tapbacks: [(emoji: String, key: String)] = [
         ("❤️", "heart"), ("👍", "like"), ("👎", "dislike"), ("😂", "laugh"), ("‼️", "emphasize"), ("❓", "question"),
     ]
@@ -64,7 +64,7 @@ nonisolated enum HiddenMessages {
 
     /// The API, or nil against a fixture database, which has no Messages behind it.
     private static func ready(to action: String) throws -> PlatformAPI? {
-        if ProcessInfo.processInfo.environment["PERCH_DB"] != nil { return nil }
+        if MessagesDB.isFixture { return nil }
         let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary  // kAXTrustedCheckOptionPrompt, which Swift 6 flags as shared state
         guard AXIsProcessTrustedWithOptions(prompt) else {
             throw Failure(errorDescription: "Allow Perch under Accessibility in System Settings to \(action).")

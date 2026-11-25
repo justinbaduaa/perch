@@ -27,72 +27,80 @@ struct Pending: Identifiable {
     }
 }
 
-/// App state. Polls chat.db and bumps `revision` whenever a new row lands.
+/// App state. Polls chat.db off the main thread, and keeps the open chat's thread loaded.
 @Observable final class Store {
     private(set) var chats: [Chat] = []
-    private(set) var revision = 0
+    /// The last messages of chats opened in the panel. Only the open one is kept up to date; switching back to
+    /// another shows what it had while that reloads.
+    private(set) var threads: [Int64: [Message]] = [:]
     private(set) var needsAccess = false
     /// Why chat.db could not be read when it is readable, shown in the panel instead of failing silently.
     private(set) var readError: String?
     private(set) var pending: [Pending] = []
-    var sendError: String?
+    private(set) var sendError: String?
     /// Files waiting in each chat's message box for Send.
     private(set) var drafts: [Int64: [URL]] = [:]
-    /// My tapback on a message while it's on its way (nil value: being removed), shown until chat.db catches up.
+    /// My tapback on a message while it's on its way (nil value: being removed), shown until chat.db has it.
     private(set) var tapbacks: [String: String?] = [:]
+    /// Messages' row of recent emoji tapbacks. Picking one sends it through Messages, which adds a row, so it's read
+    /// again whenever chat.db changes.
+    private(set) var recentEmoji: [String] = []
     let recorder = Recorder()
     /// Message guid to reminder time. The system keeps the reminders, as pending notifications keyed by guid.
     private(set) var reminders: [String: Date] = [:]
     /// Chats held at the front of the menu bar, by guid, in the order they were pinned.
     private(set) var pins = UserDefaults.standard.stringArray(forKey: "pins") ?? []
-    var panelChat: Chat?
+    /// The chat in the panel. Opening one reads it, as far as the bar's rings go.
+    var panelChat: Chat? {
+        didSet {
+            markSeen(panelChat)
+            Task { await poll() }  // loads its thread now rather than at the next tick
+        }
+    }
     var panelShown = false
     /// The menu bar avatar under the pointer.
     var hoverChat: Chat?
     let contacts = ContactBook()
-    @ObservationIgnored var onChange: () -> Void = {}
     /// Set by the app delegate, which owns the panel.
     @ObservationIgnored var showPanel: (Chat) -> Void = { _ in }
     @ObservationIgnored var hidePanel: () -> Void = {}
     @ObservationIgnored var showSetup: () -> Void = {}
 
     @ObservationIgnored private var db: MessagesDB?
-    /// chat.db's newest row, unread count and receipts on my recent messages at the last poll; any change reloads.
-    @ObservationIgnored private var lastMark: [Int64] = []
+    /// chat.db's mark (`MessagesDB.mark`) when the chat list last loaded; any change reloads.
+    @ObservationIgnored private var lastMark: Int64?
+    /// The mark each thread was loaded at.
+    @ObservationIgnored private var loadedAt: [Int64: Int64] = [:]
     @ObservationIgnored private var nextPendingID: Int64 = -1
     /// The latest send. Each waits for the one before, so they go out in the order they were sent, as in Messages.
     @ObservationIgnored private var lastSend: Task<Bool, Never>?
     /// Chat guid to the newest unread row opened in Perch, so the bar rings only what came after.
-    @ObservationIgnored private var seen = UserDefaults.standard.dictionary(forKey: "seen") as? [String: Int] ?? [:]
+    private var seen = UserDefaults.standard.dictionary(forKey: "seen") as? [String: Int] ?? [:]
     /// Chat guids marked unread from Perch, ringed until opened.
-    @ObservationIgnored private var markedUnread = Set(UserDefaults.standard.stringArray(forKey: "markedUnread") ?? [])
+    private var markedUnread = Set(UserDefaults.standard.stringArray(forKey: "markedUnread") ?? [])
     /// Messages' Hide Alerts list, as of the last poll, and what Perch has set since.
-    @ObservationIgnored private var mutedKeys: Set<String> = []
-    @ObservationIgnored private var mutedOverride: [String: Bool] = [:]
+    private var mutedKeys: Set<String> = []
+    private var mutedOverride: [String: Bool] = [:]
     /// Chats on their way out, kept off the bar until chat.db drops them.
     @ObservationIgnored private var deleting: Set<Int64> = []
 
     func start() {
-        recorder.onScreenEnded = { [unowned self] id in
-            Task {
-                if let file = try? await recorder.stop() { stage([file], for: id) }  // a finished capture waits for Send
-                onChange()
-                if let chat = chats.first(where: { $0.id == id }) { showPanel(chat) }
-            }
+        recorder.onScreenEnded = { [unowned self] id, file in
+            if let file { stage([file], for: id) }  // a finished capture waits for Send
+            if let chat = chats.first(where: { $0.id == id }) { showPanel(chat) }
         }
-        poll()
-        Task {
-            await contacts.load()
-            onChange()
-        }
+        Task { await contacts.load() }
         Task {
             let requests = await UNUserNotificationCenter.current().pendingNotificationRequests()
             for r in requests {
                 reminders[r.identifier] = (r.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate()
             }
         }
-        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
-            MainActor.assumeIsolated { self.poll() }
+        Task {
+            while true {
+                await poll()
+                try? await Task.sleep(for: .seconds(1.5))
+            }
         }
     }
 
@@ -108,7 +116,6 @@ struct Pending: Identifiable {
     func togglePin(_ chat: Chat) {
         if pins.contains(chat.guid) { pins.removeAll { $0 == chat.guid } } else { pins.append(chat.guid) }
         UserDefaults.standard.set(pins, forKey: "pins")
-        onChange()
     }
 
     /// Something they sent that I haven't opened in Perch or answered, or a chat I marked unread.
@@ -116,15 +123,13 @@ struct Pending: Identifiable {
         markedUnread.contains(chat.guid) || chat.unread.map { $0 > seen[chat.guid] ?? 0 } ?? false
     }
 
-    /// Opening a chat in Perch reads it, as far as the bar's rings go.
-    func markSeen(_ chat: Chat?) {
+    private func markSeen(_ chat: Chat?) {
         guard let chat = chats.first(where: { $0.id == chat?.id }) else { return }
-        var changed = markedUnread.remove(chat.guid) != nil
-        if let row = chat.unread.map(Int.init), seen[chat.guid] != row {
-            seen[chat.guid] = row
-            changed = true
-        }
-        guard changed else { return }
+        let row = chat.unread.map(Int.init) ?? seen[chat.guid]
+        // Checked first: even a remove that finds nothing tells observers, and the strip would redraw every poll.
+        guard markedUnread.contains(chat.guid) || seen[chat.guid] != row else { return }
+        markedUnread.remove(chat.guid)
+        seen[chat.guid] = row
         UserDefaults.standard.set(seen, forKey: "seen")
         UserDefaults.standard.set(Array(markedUnread), forKey: "markedUnread")
     }
@@ -137,12 +142,11 @@ struct Pending: Identifiable {
             markedUnread.insert(chat.guid)
             UserDefaults.standard.set(Array(markedUnread), forKey: "markedUnread")
         }
-        onChange()
         inMessages { try await HiddenMessages.setRead(read, chat: chat.guid) } undo: {}
     }
 
     func isMuted(_ chat: Chat) -> Bool {
-        mutedOverride[chat.guid] ?? mutedKeys.contains(chat.isGroup ? chat.groupID ?? "" : chat.identifier)
+        mutedOverride[chat.guid] ?? mutedKeys.contains(chat.muteKey)
     }
 
     /// Hide or Show Alerts in Messages. Perch posts no message alerts of its own.
@@ -152,14 +156,14 @@ struct Pending: Identifiable {
     }
 
     /// Reads Messages' Hide Alerts list: chat identifiers, or group ids, each muted until a date.
-    func refreshMuted() {
+    private func refreshMuted() {
         let domain = "com.apple.MobileSMS.CKDNDList" as CFString
         CFPreferencesAppSynchronize(domain)
         let list = CFPreferencesCopyAppValue("CKDNDListKey" as CFString, domain) as? [String: Int] ?? [:]
         mutedKeys = Set(list.filter { Date(timeIntervalSince1970: TimeInterval($0.value)) > .now }.keys)
         mutedOverride = mutedOverride.filter { guid, muted in  // drop what Messages has caught up with
             guard let chat = chats.first(where: { $0.guid == guid }) else { return false }
-            return mutedKeys.contains(chat.isGroup ? chat.groupID ?? "" : chat.identifier) != muted
+            return mutedKeys.contains(chat.muteKey) != muted
         }
     }
 
@@ -175,11 +179,9 @@ struct Pending: Identifiable {
         if panelChat?.id == chat.id { hidePanel() }
         deleting.insert(chat.id)
         withAnimation(.smooth) { chats.removeAll { $0.id == chat.id } }
-        onChange()
         inMessages { try await HiddenMessages.delete(chat: chat.guid) } undo: {
             self.deleting.remove(chat.id)
-            self.lastMark = []  // reload, which brings it back
-            self.poll()
+            self.lastMark = nil  // reload, which brings it back
         }
     }
 
@@ -190,7 +192,6 @@ struct Pending: Identifiable {
                 try await change()
             } catch {
                 undo()
-                onChange()
                 let alert = NSAlert()
                 alert.messageText = "Messages didn't make the change"
                 alert.informativeText = error.localizedDescription
@@ -199,17 +200,19 @@ struct Pending: Identifiable {
         }
     }
 
-    func messages(for chat: Chat) -> [Message] { (try? db?.messages(chat: chat.id)) ?? [] }
-
     func name(_ chat: Chat) -> String {
         chat.groupName ?? (chat.handles.isEmpty ? chat.identifier : chat.handles.map(contacts.name).joined(separator: ", "))
     }
 
-    func shortName(_ chat: Chat) -> String {
-        chat.handles.count == 1 && chat.groupName == nil ? contacts.shortName(chat.handles[0]) : name(chat)
-    }
+    func shortName(_ chat: Chat) -> String { chat.person.map(contacts.shortName) ?? name(chat) }
 
-    func photo(_ chat: Chat) -> NSImage? { chat.handles.count == 1 ? contacts.photo(chat.handles[0]) : nil }
+    func photo(_ chat: Chat) -> NSImage? { chat.person.flatMap(contacts.photo) }
+
+    /// Opens the thread in Messages, out from under the panel.
+    func openInMessages(_ chat: Chat) {
+        hidePanel()
+        MessagesApp.open(chat)
+    }
 
     /// Shows the send in the thread at once, then hands it to Messages, or to the hidden copy for a reply, once the
     /// sends before it have gone. Returns false if it failed.
@@ -238,10 +241,9 @@ struct Pending: Identifiable {
                 try await MessagesApp.send(text: text, to: chat)
             }
             sendError = nil
-            // The real row replaces it as soon as it lands (see `Pending.landed`); this only cleans up.
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                pending.removeAll { $0.id == p.id }
+            Task {  // its row replaces it as it lands (see `poll`); this is for one that never shows, such as a pretend send
+                try? await Task.sleep(for: .seconds(30))
+                if pending.contains(where: { $0.id == p.id }) { pending.removeAll { $0.id == p.id } }
             }
             return true
         } catch {
@@ -269,19 +271,23 @@ struct Pending: Identifiable {
         return text.isEmpty ? true : await send(text, to: chat, replyingTo: original)
     }
 
+    /// My tapback on `message`, counting one on its way.
+    func mine(_ message: Message) -> String? { tapbacks[message.guid] ?? message.mine }
+
     /// Picking the tapback you already gave takes it off, as in Messages; any other replaces it.
     func react(_ emoji: String, to message: Message, in chat: Chat) {
-        let on = message.mine != emoji
+        let on = mine(message) != emoji
         withAnimation(.smooth) { tapbacks[message.guid] = .some(on ? emoji : nil) }
         Task {
             do {
                 try await HiddenMessages.react(emoji, on: on, message: message.guid, chat: chat.guid)
                 sendError = nil
-                try? await Task.sleep(for: .seconds(6))  // chat.db has the row by now
+                try? await Task.sleep(for: .seconds(30))  // chat.db shows it long before; if it never does, show what it says
+                if tapbacks[message.guid] == .some(on ? emoji : nil) { withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) } }
             } catch {
                 sendError = error.localizedDescription
+                withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) }
             }
-            withAnimation(.smooth) { _ = tapbacks.removeValue(forKey: message.guid) }
         }
     }
 
@@ -293,28 +299,65 @@ struct Pending: Identifiable {
         let request = UNNotificationRequest(identifier: message.guid, content: content,
                                             trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false))
         let center = UNUserNotificationCenter.current()
-        guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true,
-              (try? await center.add(request)) != nil else { return }
+        guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else {
+            sendError = "Allow notifications for Perch in System Settings to get reminders."
+            return
+        }
+        guard (try? await center.add(request)) != nil else {
+            sendError = "Couldn't set the reminder."
+            return
+        }
         withAnimation(.smooth) { reminders[message.guid] = date }
     }
 
-    private func poll() {
+    /// Starts a voice note, or a screen recording, which hides the panel: out of the toolbar's way and out of the shot.
+    func record(_ kind: Recorder.Kind, for chat: Chat) {
+        Task {
+            do {
+                try await recorder.start(kind, for: chat)
+                sendError = nil
+                if kind == .screen { hidePanel() }
+            } catch {
+                sendError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Stops the voice note and sends it.
+    func finishRecording(to chat: Chat, replyingTo original: Message?) {
+        Task {
+            if let file = await recorder.stop() { await send(file: file, to: chat, replyingTo: original) }
+        }
+    }
+
+    /// Reloads the chat list when chat.db changes, and the open chat's thread when it has changed since that loaded.
+    private func poll() async {
         do {
-            if db == nil { db = try MessagesDB(path: MessagesDB.path) }
-            let mark = [try db!.maxRowID(), try db!.unreadCount()] + (try db!.receiptMark())
+            let db = try self.db ?? MessagesDB(path: MessagesDB.path)
+            self.db = db
+            let mark = try await db.mark()
             needsAccess = false
             readError = nil
-            guard mark != lastMark else { return }
-            lastMark = mark
-            chats = try db!.chats().filter { !deleting.contains($0.id) }
-            refreshMuted()
+            if mark != lastMark {
+                chats = try await db.chats().filter { !deleting.contains($0.id) }
+                recentEmoji = HiddenMessages.recentEmoji()
+                lastMark = mark  // only once loaded, so a failed load tries again next tick
+            }
+            refreshMuted()  // Hide Alerts lives in Messages' settings, which chat.db doesn't mark
+            if let id = panelChat?.id, loadedAt[id] != mark {
+                let thread = try await db.messages(chat: id)
+                loadedAt[id] = mark
+                if threads[id] != thread { threads[id] = thread }
+                if pending.contains(where: { $0.chatID == id && $0.landed(in: thread) }) {
+                    pending.removeAll { $0.chatID == id && $0.landed(in: thread) }
+                }
+                tapbacks = tapbacks.filter { guid, mine in thread.first { $0.guid == guid }.map { $0.mine != mine } ?? true }
+            }
             if panelShown { markSeen(panelChat) }  // arrived while open, so read
-            revision += 1
         } catch {
-            db = nil
-            needsAccess = !FileManager.default.isReadableFile(atPath: MessagesDB.path)
+            (db, lastMark, loadedAt) = (nil, nil, [:])  // the next connection counts marks afresh
+            needsAccess = !MessagesDB.readable
             readError = needsAccess ? nil : "\(error)"
         }
-        onChange()  // only reached on a change or a failure
     }
 }

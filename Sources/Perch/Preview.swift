@@ -5,8 +5,14 @@ import Quartz
 final class Preview: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = Preview()
 
-    /// Media in the open conversation, oldest first.
-    var urls: [URL] = []
+    /// Media in the open conversation, oldest first. Setting it lets go of other chats' thumbnails.
+    var urls: [URL] = [] {
+        didSet {
+            let keep = Set(urls)
+            frames = frames.filter { keep.contains($0.key) }
+            images = images.filter { keep.contains($0.key) }
+        }
+    }
     /// Where each thumbnail sits in the panel's "panel" coordinate space, which is `host`'s bounds.
     var frames: [URL: CGRect] = [:]
     var images: [URL: NSImage] = [:]
@@ -16,7 +22,8 @@ final class Preview: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate 
     func toggle(_ url: URL) {
         guard let panel = QLPreviewPanel.shared() else { return }
         if panel.isVisible { return panel.orderOut(nil) }
-        start = urls.firstIndex(of: url) ?? 0
+        guard let i = urls.firstIndex(of: url) else { return }  // a send on its way isn't in the thread yet
+        start = i
         panel.makeKeyAndOrderFront(nil)  // asks the responder chain for a controller, see KeyablePanel
     }
 

@@ -19,19 +19,23 @@ enum Clipboard {
         pb.writeObjects(items)
     }
 
-    /// Files to put in the message box from the clipboard: files copied in Finder or Perch, or a bare picture
-    /// (a screenshot copied to the clipboard, Copy Image in a browser), saved as a PNG. Nil when the clipboard
-    /// holds text, which the text field pastes as usual.
+    /// Files to put in the message box from the clipboard: files copied in Finder or Perch, or a bare picture.
+    /// Nil when the clipboard holds text, which the text field pastes as usual.
     static func pastedFiles(from pb: NSPasteboard = .general) -> [URL]? {
         let files = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         if !files.isEmpty { return files }
-        guard pb.string(forType: .string) == nil,
-              let png = pb.data(forType: .png) ?? pb.data(forType: .tiff).flatMap(pngData) else { return nil }
+        guard pb.string(forType: .string) == nil else { return nil }
+        return picture(from: pb).map { [$0] }
+    }
+
+    /// A picture on a pasteboard (a screenshot, Copy Image in a browser, one dragged off a page), saved as a PNG.
+    static func picture(from pb: NSPasteboard) -> URL? {
+        guard let png = NSImage(pasteboard: pb)?.tiffRepresentation.flatMap(pngData) else { return nil }
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        let url = dir.appending(path: "Pasted image.png")
+        let url = dir.appending(path: "Image.png")
         guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
               (try? png.write(to: url)) != nil else { return nil }
-        return [url]
+        return url
     }
 
     private static func pngData(_ tiff: Data) -> Data? {

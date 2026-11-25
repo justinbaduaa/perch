@@ -49,21 +49,19 @@ enum Access: CaseIterable, Identifiable {
     /// Asked for in Settings rather than in a prompt over the window.
     var inSettings: Bool { self == .fullDisk || self == .accessibility || self == .screen }
 
-    /// Its pane in Privacy & Security, where a refused grant can be changed.
+    /// Its pane in System Settings, where a refused grant can be changed.
     var settings: URL {
-        let pane = switch self {
-        case .fullDisk: "Privacy_AllFiles"
-        case .contacts: "Privacy_Contacts"
-        case .messages: "Privacy_Automation"
-        case .accessibility: "Privacy_Accessibility"
-        case .notifications: "Notifications"
-        case .microphone: "Privacy_Microphone"
-        case .screen: "Privacy_ScreenCapture"
+        let privacy = "x-apple.systempreferences:com.apple.preference.security?"
+        let link = switch self {
+        case .fullDisk: privacy + "Privacy_AllFiles"
+        case .contacts: privacy + "Privacy_Contacts"
+        case .messages: privacy + "Privacy_Automation"
+        case .accessibility: privacy + "Privacy_Accessibility"
+        case .notifications: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")"
+        case .microphone: privacy + "Privacy_Microphone"
+        case .screen: privacy + "Privacy_ScreenCapture"
         }
-        if self == .notifications {
-            return URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")!
-        }
-        return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!
+        return URL(string: link)!
     }
 }
 
@@ -75,17 +73,13 @@ enum Access: CaseIterable, Identifiable {
     /// Prompted for since launch.
     @ObservationIgnored private var asked: Set<Access> = []
 
-    /// Screen recording goes through CleanShot X when it's installed, which has its own grant.
-    var needed: [Access] {
-        let cleanShot = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "pl.maketheweb.cleanshotx") != nil
-        return Access.allCases.filter { $0 != .screen || !cleanShot }
-    }
+    var needed: [Access] { Access.allCases.filter { $0 != .screen || !Recorder.usesCleanShot } }
 
     var missing: [Access] { needed.filter { !granted.contains($0) } }
 
     func refresh() async {
         var now: Set<Access> = []
-        if FileHandle(forReadingAtPath: MessagesDB.path) != nil { now.insert(.fullDisk) }  // only Full Disk Access opens it
+        if MessagesDB.readable { now.insert(.fullDisk) }
         if CNContactStore.authorizationStatus(for: .contacts) == .authorized { now.insert(.contacts) }
         if await Self.messages(ask: false) == noErr { now.insert(.messages) }
         if AXIsProcessTrusted() { now.insert(.accessibility) }

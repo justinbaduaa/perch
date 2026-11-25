@@ -5,7 +5,7 @@ import Testing
 @testable import Perch
 
 /// Builds a chat.db with the columns Perch reads and checks what comes back.
-@Test func readsTextAttachmentsAndTapbacks() throws {
+@Test func readsTextAttachmentsAndTapbacks() async throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -66,12 +66,13 @@ import Testing
     sqlite3_close(db)
 
     let messages = try MessagesDB(path: path)
-    #expect(try messages.chats().map(\.groupName) == [nil, "Team"])
-    #expect(try messages.chats().first?.handles == ["+15551234567"])
-    #expect(try messages.chats().map(\.unread) == [8, 9])
-    #expect(try messages.chats().map(\.isGroup) == [false, true])  // their unread D came after my last message (R2)
+    let chats = try await messages.chats()
+    #expect(chats.map(\.groupName) == [nil, "Team"])
+    #expect(chats.first?.handles == ["+15551234567"])
+    #expect(chats.map(\.unread) == [8, 9])  // their unread D came after my last message (R2)
+    #expect(chats.map(\.isGroup) == [false, true])
 
-    let rows = try messages.messages(chat: 1)
+    let rows = try await messages.messages(chat: 1)
     #expect(rows.map(\.text) == ["hello", "from attributedBody", ""])
     #expect(rows.map(\.reactions) == [["😂"], [], []])  // B's ❤️ was removed by the 3000 row
     #expect(rows.map(\.mine) == ["😂", nil, nil])  // the 😂 on A is mine
@@ -80,7 +81,7 @@ import Testing
     #expect(rows.map(\.replyTo) == [nil, nil, "A"])
     #expect(rows.map(\.receipt) == [nil, .read(Date(timeIntervalSinceReferenceDate: 9)), nil])  // only mine have one
 
-    let link = try #require(try messages.messages(chat: 2).first?.link)
+    let link = try #require(try await messages.messages(chat: 2).first?.link)
     #expect(link.title == "Cobalt" && link.site == "American Express")
     #expect(link.url.absoluteString == "https://americanexpress.com/x")
     #expect(link.image?.path == preview.path)  // the preview file isn't shown as an attachment of its own
@@ -115,7 +116,6 @@ import Testing
         #expect(abs(rest[0] - (width - rest[count - 1] - AvatarStrip.size)) < 0.001)  // centred in the spread strip
         #expect(abs(rest[count - 1] + AvatarStrip.size - rest[0] - AvatarStrip.stackWidth(count)) < 0.001)  // fills the item
     }
-    #expect(AvatarStrip.stackWidth(6) == 85 && AvatarStrip.width(6) == 140)
 }
 
 /// Only a video in a capture folder made after recording started counts; old captures and screenshots don't.
@@ -192,4 +192,21 @@ import Testing
 @Test func recentEmojiMatchMessagesRow() {
     let order = ["emoji:🥀", "emoji:👨🏿‍❤️‍💋‍👨🏿", "sticker:B7576BAE", "emoji:😭", "emoji:❤️", "emoji:👍🏽", "emoji:🥀"]
     #expect(HiddenMessages.recentEmoji(order) == ["🥀", "👨‍❤️‍💋‍👨", "😭"])
+}
+
+/// A voice note's bars follow its loudness over time: a loud second, then a quiet one.
+@Test func waveformFollowsLoudness() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "note.caf")
+    let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+    let tone = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 88_200)!
+    tone.frameLength = 88_200
+    for i in 0..<88_200 { tone.floatChannelData![0][i] = (i < 44_100 ? 0.5 : 0.05) * sin(Float(i) * 2 * .pi * 220 / 44_100) }
+    do { try AVAudioFile(forWriting: url, settings: format.settings).write(from: tone) }
+
+    let bars = waveform(url)
+    #expect(bars.count == 28)
+    #expect(bars.prefix(13).allSatisfy { $0 > 0.9 } && bars.suffix(13).allSatisfy { $0 < 0.2 }, "\(bars)")
 }

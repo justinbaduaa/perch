@@ -7,24 +7,30 @@ import CoreGraphics
     enum Kind { case voice, screen }
     struct Failure: LocalizedError { let errorDescription: String? }
 
+    /// Screen recordings go through CleanShot X when it's installed, which needs no Screen Recording grant of Perch's.
+    static var usesCleanShot: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "pl.maketheweb.cleanshotx") != nil
+    }
+
     private(set) var kind: Kind?
     private(set) var chatID: Int64?
     private(set) var started = Date.now
     /// The screen capture ended and its file is being shrunk.
     private(set) var finishing = false
-    /// A finished screen capture, waiting for Send.
-    private(set) var ready: URL?
     /// Where the running screen capture is stopped.
     private(set) var stopHint = ""
     /// A voice note's loudness so far, 0...1, about 16 a second, the latest 120.
     private(set) var levels: [CGFloat] = []
-    /// Called with the chat id when a screen capture ends, stopped or cancelled, so the panel can come back.
-    @ObservationIgnored var onScreenEnded: (Int64) -> Void = { _ in }
+    /// Called with the chat id and the file (nil if cancelled) when a screen capture ends, so the panel can come back.
+    @ObservationIgnored var onScreenEnded: (Int64, URL?) -> Void = { _, _ in }
     @ObservationIgnored private var audio: AVAudioRecorder?
     @ObservationIgnored private var screen: Process?
     @ObservationIgnored private var file: URL?
     @ObservationIgnored private var watch: Task<Void, Never>?
     @ObservationIgnored private var meter: Task<Void, Never>?
+    /// The folder this take writes in. A discard or a new take replaces it, so a capture still finishing for an
+    /// earlier take is dropped instead of staged.
+    @ObservationIgnored private var take: URL?
 
     func start(_ kind: Kind, for chat: Chat) async throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -50,12 +56,12 @@ import CoreGraphics
                     try? await Task.sleep(for: .milliseconds(60))
                 }
             }
-        case .screen where NSWorkspace.shared.urlForApplication(withBundleIdentifier: "pl.maketheweb.cleanshotx") != nil:
+        case .screen where Self.usesCleanShot:
             // CleanShot's recorder picks the area, window or display, and has pause, restart and stop.
             NSWorkspace.shared.open(URL(string: "cleanshot://record-screen")!)
             stopHint = "Recording in CleanShot"
             let since = Date.now
-            watch = Task { await waitForCleanShot(since: since) }
+            watch = Task { await waitForCleanShot(since: since, take: dir) }
         case .screen:
             guard CGPreflightScreenCaptureAccess() else {
                 CGRequestScreenCaptureAccess()
@@ -67,21 +73,22 @@ import CoreGraphics
             let process = Process()
             process.executableURL = URL(filePath: "/usr/sbin/screencapture")
             process.arguments = ["-iU", "-Jvideo", "-x", url.path]
+            process.terminationHandler = { [weak self] _ in  // no file when cancelled in the toolbar
+                Task { @MainActor in await self?.finish(FileManager.default.fileExists(atPath: url.path) ? url : nil, take: dir) }
+            }
             try process.run()
             screen = process
-            file = url
             stopHint = "Stop with ⌃⌘⎋"  // the menu bar's Stop Sharing cancels instead, without a file
-            Task { await waitForScreen(process, url: url) }
         }
         self.kind = kind
         chatID = chat.id
         started = .now
+        take = dir
     }
 
-    /// The file to send: the voice note, stopped now and brought up to a normal level, or the finished screen capture.
-    func stop() async throws -> URL? {
+    /// Stops the voice note and returns it, brought up to a normal level.
+    func stop() async -> URL? {
         defer { reset() }
-        if let ready { return ready }
         audio?.stop()
         guard audio != nil, let file else { return nil }
         return await Self.louder(file)
@@ -119,34 +126,29 @@ import CoreGraphics
         reset()
     }
 
-    private func waitForScreen(_ process: Process, url: URL) async {
-        while process.isRunning { try? await Task.sleep(for: .milliseconds(200)) }
-        guard screen === process, let chatID else { return }  // discarded meanwhile
-        screen = nil
-        if FileManager.default.fileExists(atPath: url.path) {
+    /// A screen capture ended, from either recorder: shrinks a QuickTime file, then hands it over, unless the take was
+    /// discarded meanwhile.
+    private func finish(_ file: URL?, take: URL) async {
+        guard self.take == take, let chatID else { return }
+        var file = file
+        if let mov = file, mov.pathExtension.lowercased() == "mov" {
             finishing = true
-            let shrunk = await Self.shrink(url)
-            guard self.chatID == chatID else { return }  // discarded while shrinking
-            ready = shrunk
-            finishing = false
-        } else {
-            reset()  // cancelled in the toolbar
+            file = await Self.shrink(mov)
+            guard self.take == take else { return }
         }
-        onScreenEnded(chatID)
+        reset()
+        onScreenEnded(chatID, file)
     }
 
     /// CleanShot can't hand a recording back, but it keeps every capture in its media folder, one folder each.
     /// Take the first new video there once it stops growing, which is when CleanShot has finished writing it.
-    private func waitForCleanShot(since: Date) async {
+    private func waitForCleanShot(since: Date, take: URL) async {
         let media = URL.homeDirectory.appending(path: "Library/Application Support/CleanShot/media")
         var lastSize = -1
-        while !Task.isCancelled, let chatID {
+        while self.take == take {
             if let video = Self.capture(in: media, since: since) {
                 let size = (try? video.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if size > 0, size == lastSize {
-                    ready = video.pathExtension.lowercased() == "mov" ? await Self.shrink(video) : video
-                    return onScreenEnded(chatID)
-                }
+                if size > 0, size == lastSize { return await finish(video, take: take) }
                 lastSize = size
             }
             try? await Task.sleep(for: .milliseconds(500))
@@ -182,11 +184,11 @@ import CoreGraphics
         audio = nil
         screen = nil
         file = nil
-        ready = nil
         stopHint = ""
         watch = nil
         kind = nil
         chatID = nil
         finishing = false
+        take = nil
     }
 }

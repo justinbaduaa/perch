@@ -3,7 +3,7 @@ import SQLite3
 import UniformTypeIdentifiers
 
 /// A conversation in chat.db. `guid` is the id Messages' AppleScript uses for the chat.
-struct Chat: Identifiable, Hashable {
+nonisolated struct Chat: Identifiable, Hashable {
     let id: Int64
     let guid: String
     let identifier: String
@@ -16,9 +16,13 @@ struct Chat: Identifiable, Hashable {
     var unread: Int64?
 
     var isGroup: Bool { guid.contains(";+;") }
+    /// The other person in a one-to-one chat. A group down to one other member is still a group.
+    var person: String? { isGroup ? nil : handles.first }
+    /// What Messages' Hide Alerts list calls this chat.
+    var muteKey: String { isGroup ? groupID ?? "" : identifier }
 }
 
-struct Attachment: Hashable {
+nonisolated struct Attachment: Hashable {
     let url: URL
     let mime: String
     var isAudio: Bool { mime.hasPrefix("audio/") }
@@ -27,7 +31,7 @@ struct Attachment: Hashable {
 }
 
 /// A link's preview card, as Messages saved it when the link was sent.
-struct LinkPreview: Hashable {
+nonisolated struct LinkPreview: Hashable {
     let url: URL
     let title: String?
     let site: String?
@@ -36,11 +40,11 @@ struct LinkPreview: Hashable {
 }
 
 /// How far a message of mine has got, as Messages writes under the last one.
-enum Receipt: Equatable {
+nonisolated enum Receipt: Equatable {
     case sending, sent, delivered, read(Date), failed
 }
 
-struct Message: Identifiable {
+nonisolated struct Message: Identifiable, Equatable {
     let id: Int64
     let guid: String
     let date: Date
@@ -56,69 +60,67 @@ struct Message: Identifiable {
     var link: LinkPreview?
     /// Mine only.
     var receipt: Receipt?
+
+    /// Photos, videos and other files: what shows as thumbnails, and what Quick Look steps through.
+    var media: [Attachment] { attachments.filter { !$0.isAudio } }
 }
 
-struct DBError: Error { let message: String }
+nonisolated struct DBError: Error { let message: String }
 
-/// Read-only view of the Messages database. Opening it needs Full Disk Access.
-final class MessagesDB {
+/// Read-only view of the Messages database, read off the main thread. Opening it needs Full Disk Access.
+actor MessagesDB {
     static let path = ProcessInfo.processInfo.environment["PERCH_DB"]
         ?? URL.homeDirectory.appending(path: "Library/Messages/chat.db").path
+    /// A fixture database has no Messages behind it, so sends and chat actions only pretend.
+    static let isFixture = ProcessInfo.processInfo.environment["PERCH_DB"] != nil
+    /// The most messages a thread loads.
+    static let threadLength: Int64 = 80
+
+    /// Whether Perch can open chat.db, which only Full Disk Access allows.
+    static var readable: Bool { FileHandle(forReadingAtPath: path) != nil }
 
     private var db: OpaquePointer?
 
+    /// Opens without reading, so a missing Full Disk Access shows on the first read, not here.
     init(path: String) throws {
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             defer { sqlite3_close(db) }
             throw DBError(message: String(cString: sqlite3_errmsg(db)))
         }
-        _ = try maxRowID()  // TCC denial surfaces on first read, not on open
     }
 
     isolated deinit { sqlite3_close(db) }
 
-    func maxRowID() throws -> Int64 {
-        var id: Int64 = 0
-        try query("SELECT IFNULL(MAX(ROWID), 0) FROM message") { id = $0.int(0) }
-        return id
+    /// Changes whenever Messages writes anything: a message, an edit or unsend, a read, a receipt, a download finishing.
+    /// It counts per connection, so marks from two connections can't be compared.
+    func mark() throws -> Int64 {
+        var version: Int64 = 0
+        try query("PRAGMA data_version") { version = $0.int(0) }
+        return version
     }
 
-    /// Changes when something is read or marked unread anywhere, which adds no row.
-    func unreadCount() throws -> Int64 {
-        var n: Int64 = 0
-        try query("SELECT COUNT(*) FROM message WHERE is_read = 0 AND is_from_me = 0") { n = $0.int(0) }
-        return n
-    }
-
-    /// Changes when one of my recent messages is sent, delivered, read or fails, which adds no row.
-    func receiptMark() throws -> [Int64] {
-        var mark: [Int64] = []
-        try query("""
-            SELECT SUM(is_sent), SUM(is_delivered), MAX(date_read), SUM(error != 0) FROM message
-            WHERE is_from_me = 1 AND ROWID > (SELECT MAX(ROWID) FROM message) - 100
-            """) { r in mark = [r.int(0), r.int(1), r.int(2), r.int(3)] }
-        return mark
-    }
-
-    /// Most recently active conversations first.
-    func chats(limit: Int64 = 100) throws -> [Chat] {
+    /// Most recently active conversations first. Unread rows are found once through Messages' unread index, and my
+    /// newest by walking each chat back from its end: a MAX over each chat's messages took 250 ms on 300k messages.
+    func chats() throws -> [Chat] {
         var out: [Chat] = []
         try query("""
             WITH top AS (
               SELECT c.ROWID AS id, c.guid, c.chat_identifier, c.display_name, c.group_id, MAX(cmj.message_date) AS last
               FROM chat c JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
-              GROUP BY c.ROWID ORDER BY last DESC LIMIT ?)
+              GROUP BY c.ROWID ORDER BY last DESC LIMIT 100),
+            unread AS MATERIALIZED (
+              SELECT j.chat_id, MAX(m.ROWID) AS row FROM message m CROSS JOIN chat_message_join j
+              WHERE j.message_id = m.ROWID AND m.is_from_me = 0 AND m.is_read = 0
+                AND m.item_type = 0 AND m.associated_message_type = 0
+              GROUP BY j.chat_id)
             SELECT id, guid, chat_identifier, display_name,
               (SELECT group_concat(h.id, ',') FROM chat_handle_join j
                  JOIN handle h ON h.ROWID = j.handle_id WHERE j.chat_id = top.id),
-              last, group_id,
-              (SELECT MAX(m.ROWID) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
-                 WHERE j.chat_id = top.id AND m.is_from_me = 0 AND m.is_read = 0
-                   AND m.item_type = 0 AND m.associated_message_type = 0),
-              (SELECT MAX(m.ROWID) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
-                 WHERE j.chat_id = top.id AND m.is_from_me = 1)
-            FROM top ORDER BY last DESC
-            """, limit) { r in
+              last, group_id, unread.row,
+              (SELECT j.message_id FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id
+                 WHERE j.chat_id = top.id AND m.is_from_me = 1 ORDER BY j.message_id DESC LIMIT 1)
+            FROM top LEFT JOIN unread ON unread.chat_id = top.id ORDER BY last DESC
+            """) { r in
             let unread = r.int(7), mine = r.int(8)  // 0 when there is none
             out.append(Chat(
                 id: r.int(0), guid: r.text(1) ?? "", identifier: r.text(2) ?? "",
@@ -131,8 +133,8 @@ final class MessagesDB {
         return out
     }
 
-    /// The last `limit` rows of a chat, oldest first, with tapbacks folded onto their targets.
-    func messages(chat: Int64, limit: Int64 = 80) throws -> [Message] {
+    /// The last `threadLength` rows of a chat, oldest first, with tapbacks folded onto their targets.
+    func messages(chat: Int64) throws -> [Message] {
         var rows: [Message] = []
         var tapbacks: [(target: String, sender: String, type: Int64, emoji: String?)] = []
         var linkImages: [Int64: Int] = [:]  // message ROWID to which of its preview files is the picture
@@ -146,7 +148,7 @@ final class MessagesDB {
             LEFT JOIN handle h ON h.ROWID = m.handle_id
             WHERE cmj.chat_id = ? AND m.item_type = 0
             ORDER BY cmj.message_date DESC LIMIT ?
-            """, chat, limit) { r in
+            """, chat, Self.threadLength) { r in
             let fromMe = r.int(3) != 0
             if r.int(7) == 0 {
                 let raw = r.text(5).flatMap { $0.isEmpty ? nil : $0 } ?? r.data(6).flatMap(decodeAttributedBody) ?? ""
@@ -170,13 +172,13 @@ final class MessagesDB {
 
         let index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
         var previewFiles: [Int: [URL]] = [:]  // row index to its link preview's files, in order
+        // Exactly the rows above (ids are integers, so nothing to escape).
         try query("""
             SELECT maj.message_id, a.filename, a.mime_type
             FROM message_attachment_join maj JOIN attachment a ON a.ROWID = maj.attachment_id
-            WHERE maj.message_id IN (SELECT message_id FROM chat_message_join
-                                     WHERE chat_id = ? ORDER BY message_date DESC LIMIT ?)
+            WHERE maj.message_id IN (\(index.keys.map(String.init).joined(separator: ",")))
             ORDER BY a.ROWID
-            """, chat, limit) { r in
+            """) { r in
             guard let i = index[r.int(0)], let name = r.text(1) else { return }
             let url = URL(filePath: (name as NSString).expandingTildeInPath)
             if name.hasSuffix("pluginPayloadAttachment") { return previewFiles[i, default: []].append(url) }
@@ -196,7 +198,9 @@ final class MessagesDB {
             var target = String(t.target.split(separator: "/").last ?? "")  // "p:0/GUID" or "bp:GUID"
             if target.hasPrefix("bp:") { target.removeFirst(3) }
             switch t.type {
-            case 2000...2006: current[target, default: [:]][t.sender] = tapbackEmoji[t.type] ?? t.emoji
+            case 2000...2006:  // the six, then 2006 for any other emoji
+                let i = Int(t.type - 2000), six = HiddenMessages.tapbacks
+                current[target, default: [:]][t.sender] = i < six.count ? six[i].emoji : t.emoji
             case 3000...3006: current[target]?[t.sender] = nil
             default: break
             }
@@ -226,7 +230,7 @@ final class MessagesDB {
     }
 }
 
-private struct Row {
+nonisolated private struct Row {
     let stmt: OpaquePointer
     func int(_ i: Int32) -> Int64 { sqlite3_column_int64(stmt, i) }
     func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
@@ -235,11 +239,9 @@ private struct Row {
     }
 }
 
-private let tapbackEmoji: [Int64: String] = [2000: "❤️", 2001: "👍", 2002: "👎", 2003: "😂", 2004: "‼️", 2005: "❓"]
-
 /// Reads the preview Messages saved for a link: an NSKeyedArchiver plist of Messages' own classes, walked as plain
 /// dictionaries (as Beeper's platform-imessage does). The picture is an index into the message's preview files.
-func linkPreview(_ data: Data) -> (link: LinkPreview, image: Int?)? {
+nonisolated func linkPreview(_ data: Data) -> (link: LinkPreview, image: Int?)? {
     guard let archive = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
           let objects = archive["$objects"] as? [Any],
           let root = (archive["$top"] as? [String: Any])?["root"] else { return nil }
@@ -273,7 +275,7 @@ func linkPreview(_ data: Data) -> (link: LinkPreview, image: Int?)? {
 }
 
 /// A keyed archive's reference to another of its objects. Binary plists hold these as an opaque CF type.
-private func archiveUID(_ value: Any) -> Int? {
+nonisolated private func archiveUID(_ value: Any) -> Int? {
     if let dict = value as? [String: Any] { return dict.count == 1 ? dict["CF$UID"] as? Int : nil }
     if value is String || value is Data || value is NSNumber || value is [Any] { return nil }
     let text = String(describing: value)  // "<CFKeyedArchiverUID 0x…>{value = 7}"
@@ -282,9 +284,9 @@ private func archiveUID(_ value: Any) -> Int? {
 }
 
 /// chat.db stores dates as nanoseconds since 2001-01-01, which is Foundation's reference date.
-private func appleDate(_ ns: Int64) -> Date { Date(timeIntervalSinceReferenceDate: Double(ns) / 1_000_000_000) }
+nonisolated private func appleDate(_ ns: Int64) -> Date { Date(timeIntervalSinceReferenceDate: Double(ns) / 1_000_000_000) }
 
 /// Messages keeps most text only in `attributedBody`, an NSArchiver typedstream of an NSAttributedString.
-private func decodeAttributedBody(_ data: Data) -> String? {
+nonisolated private func decodeAttributedBody(_ data: Data) -> String? {
     (NSUnarchiver(forReadingWith: data)?.decodeObject() as? NSAttributedString)?.string
 }

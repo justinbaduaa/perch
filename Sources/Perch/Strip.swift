@@ -26,6 +26,8 @@ final class AvatarStrip {
     private let store: Store
     private var xs: [CGFloat] = []  // drawn x of each slot, eased toward the layout
     private var easing: Timer?
+    /// Counts draws, so only the latest one's observation redraws.
+    private var draws = 0
 
     init(store: Store) { self.store = store }
 
@@ -33,6 +35,9 @@ final class AvatarStrip {
     var moreSlot: Int? { store.chats.count > bar.count ? bar.count : nil }
     private var slots: Int { bar.count + (moreSlot == nil ? 0 : 1) }
     private var spread: Bool { inside || store.panelShown || dropTarget != nil }
+
+    /// The chat in `slot`, or nil for "•••" or no slot.
+    func chat(in slot: Int?) -> Chat? { slot.flatMap { $0 < bar.count ? bar[$0] : nil } }
 
     /// Where `chat` lives in the strip: its avatar, or "•••" for a chat beyond the bar.
     func slot(of chat: Chat) -> Int? { bar.firstIndex { $0.id == chat.id } ?? moreSlot }
@@ -81,6 +86,14 @@ final class AvatarStrip {
         return NSPoint(x: r.midX - Self.width(slots) / 2 + spread[slot] + Self.size / 2, y: r.minY - 6)
     }
 
+    /// A box of `size` hanging under `slot`, kept on screen: the name pill, the drop pill and the panel.
+    func frame(under slot: Int, size: NSSize) -> NSRect {
+        let at = anchor(under: slot)
+        let screen = item.button?.window?.screen?.visibleFrame ?? .infinite
+        let x = min(max(at.x - size.width / 2, screen.minX + 8), screen.maxX - size.width - 8)
+        return NSRect(x: x, y: at.y - size.height, width: size.width, height: size.height)
+    }
+
     /// Spreads or gathers the strip as the pointer enters or leaves. Returns true when the hovered slot changed.
     func pointerMoved() -> Bool {
         let at = NSEvent.mouseLocation, now = slot(at: at)
@@ -102,7 +115,7 @@ final class AvatarStrip {
             MainActor.assumeIsolated {
                 let target = Self.layout(slots, spread: spread)  // read every tick, so leaving mid-spread turns it around
                 if xs.count != target.count { xs = target }
-                if let liftedAt, Date.now.timeIntervalSince(liftedAt) < Self.handover { return draw() }  // see `draw`
+                if let liftedAt, Date.now.timeIntervalSince(liftedAt) < Self.handover { return draw() }  // see `render`
                 if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { xs = target }
                 if xs.indices.allSatisfy({ abs(target[$0] - xs[$0]) < 0.25 }) {
                     xs = target
@@ -126,7 +139,16 @@ final class AvatarStrip {
         return Color(red: c[0], green: c[1], blue: c[2])
     }
 
+    /// Draws, and draws again when anything it drew from changes: chats, pins, rings, contacts, the open chat.
     private func draw() {
+        draws += 1
+        let drawn = draws
+        withObservationTracking(render, onChange: { [unowned self] in
+            Task { @MainActor in if draws == drawn { update() } }
+        })
+    }
+
+    private func render() {
         guard let button = item.button else { return }
         let bar = bar, store = store
         button.setAccessibilityLabel(bar.isEmpty ? "Perch" : bar.map(store.name).joined(separator: ", "))
@@ -144,12 +166,17 @@ final class AvatarStrip {
         // 0 on the stack, 1 spread.
         let opened = slots < 2 ? 0 : min(1, max(0, (xs[slots - 1] - xs[0] - stack[slots - 1] + stack[0])
             / (CGFloat(slots - 1) * (Self.size + Self.gap - Self.rest))))
+        // Read here rather than in the view: reads inside ImageRenderer's views escape `draw`'s observation.
         let recording = bar.firstIndex { $0.id == store.recorder.chatID }
+        let faces = bar.enumerated().map { i, chat in
+            // Red while recording for them, white for the open chat, blue for something unread.
+            let ring: Color? = i == recording ? .red : i == open ? .primary : store.isUnread(chat) ? .blue : nil
+            return (chat: chat, photo: store.photo(chat), name: store.name(chat), ring: ring)
+        }
         let strip = ZStack(alignment: .leading) {
-            ForEach(Array(bar.enumerated()), id: \.element.id) { i, chat in
-                // Red while recording for them, white for the open chat, blue for something unread.
-                let ring: Color? = i == recording ? .red : i == open ? .primary : store.isUnread(chat) ? .blue : nil
-                Avatar(image: store.photo(chat), name: store.name(chat), size: size, cornerRadius: Self.corner)
+            ForEach(Array(faces.enumerated()), id: \.element.chat.id) { i, face in
+                let ring = face.ring
+                Avatar(image: face.photo, name: face.name, size: size, cornerRadius: Self.corner)
                     .overlay { shape.strokeBorder(ring ?? rim, lineWidth: ring == nil ? 1 : 1.5) }
                     .offset(x: xs[i])
                     .zIndex(Double(bar.count - i))
@@ -167,7 +194,6 @@ final class AvatarStrip {
         let renderer = ImageRenderer(content: strip)
         renderer.scale = button.window?.backingScaleFactor ?? 2
         guard let menuBar = button.window?.frame, let r = itemFrame else { return button.image = renderer.nsImage }
-        // The floating window spans the spread strip, centred on the item, as tall as the menu bar.
         let over = NSRect(x: r.midX - Self.width(slots) / 2 - Self.pad, y: menuBar.minY,
                           width: Self.width(slots) + 2 * Self.pad, height: menuBar.height)
         guard floating else {
@@ -211,7 +237,7 @@ private final class Lifted: NSPanel {
         ignoresMouseEvents = true
         let clicks = Clicks()
         clicks.onClick = { [unowned self] in onClick() }
-        glass.tintColor = .black.withAlphaComponent(0.3)  // the panel's shade
+        glass.tintColor = .panelShade
         avatars.imageScaling = .scaleNone
         clicks.addSubview(glass)
         clicks.addSubview(avatars)

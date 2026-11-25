@@ -4,12 +4,13 @@ import SwiftUI
 /// Dragging files near the menu bar drops a glass pill under the nearest face, "Drop to Ashley", which follows the
 /// pointer from face to face. Dropping there puts the files in that chat's message box and opens it.
 ///
-/// A drag belongs to the app it started in, so Perch watches for it with a global monitor, then puts up a window
-/// over the strip and the room under it to take the drop. The window is up only while a file drag is near.
+/// A drag belongs to the app it started in, and macOS doesn't tell other apps where it goes. So from every press
+/// until it's let go, Perch checks where the pointer is. Once a press has moved and comes near the faces, a clear
+/// window goes up over the strip and the room under it. Only a real drag reaches that window, so a press that isn't
+/// one (dragging a window, selecting text) shows nothing. The drag pasteboard can't tell the two apart: the Dock's
+/// stacks drag without writing it.
 final class DropZone: NSPanel {
-    /// The bar slot the pill is under, as the pointer moves; nil when it leaves.
-    var onTarget: (Int?) -> Void = { _ in }
-    var onDrop: (Int, [URL]) -> Void = { _, _ in }
+    var onDrop: (Chat, [URL]) -> Void = { _, _ in }
 
     private let strip: AvatarStrip
     private let store: Store
@@ -17,19 +18,20 @@ final class DropZone: NSPanel {
     private let pill = NSGlassEffectView()
     private let label = NSHostingView(rootView: DropPill(name: "", pointer: nil))
     private var slot: Int?
-    /// The drag pasteboard's count at the last press. A drag that starts after it writes there; one left from an
-    /// earlier drag doesn't count.
-    private var pressCount = 0
     private var watch: Task<Void, Never>?
 
     static let pillSize = NSSize(width: 300, height: 110)
     /// How far below the menu bar a drag still counts as near the faces.
     private static let reach: CGFloat = pillSize.height + 30
+    /// Files, files another app writes on drop (Photos, Mail), and pictures (a browser's, a screenshot thumbnail's).
+    fileprivate static let types: [NSPasteboard.PasteboardType] =
+        [.fileURL] + (NSFilePromiseReceiver.readableDraggedTypes + NSImage.imageTypes).map { NSPasteboard.PasteboardType($0) }
 
     init(strip: AvatarStrip, store: Store) {
         self.strip = strip
         self.store = store
-        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        hidesOnDeactivate = false  // Perch is in the background whenever another app's drag comes by
         isOpaque = false
         backgroundColor = NSColor(white: 0, alpha: 0.004)  // clear, but solid enough for the window to take the drag
         hasShadow = false
@@ -37,32 +39,37 @@ final class DropZone: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         animationBehavior = .none
         pill.cornerRadius = 26
-        pill.tintColor = .black.withAlphaComponent(0.3)  // the panel's shade
+        pill.tintColor = .panelShade
         pill.contentView = label
         pill.alphaValue = 0
         target.addSubview(pill)
-        target.registerForDraggedTypes([.fileURL])
         target.zone = self
         contentView = target
+        target.registerForDraggedTypes(Self.types)
     }
 
     required init?(coder: NSCoder) { fatalError("not used from nibs") }
 
-    func pressed() { pressCount = NSPasteboard(name: .drag).changeCount }
+    /// From the global monitor, on a press in another app: follows it until it's let go, 20 times a second.
+    func pressed() {
+        guard watch == nil else { return }
+        let from = NSEvent.mouseLocation
+        watch = Task {
+            while NSEvent.pressedMouseButtons & 1 != 0 {
+                let at = NSEvent.mouseLocation
+                if !isVisible, hypot(at.x - from.x, at.y - from.y) > 4, !strip.bar.isEmpty, area.contains(at) { show() }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            // Let go anywhere else and this window hears nothing more, so it goes. Over a face, the drop may not have
+            // arrived yet; the drag's end takes the window down then.
+            if slot == nil { hide() }
+            watch = nil
+        }
+    }
 
-    /// From the global drag monitor: comes up once a file drag started since the last press is near the faces.
-    func dragged() {
-        guard !isVisible, !store.barChats.isEmpty else { return }
-        let drag = NSPasteboard(name: .drag)
-        guard drag.changeCount != pressCount, drag.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]),
-              area.contains(NSEvent.mouseLocation) else { return }
+    private func show() {
         setFrame(area, display: false)
         orderFrontRegardless()
-        // Ends with the drag, wherever it's let go: a drop elsewhere sends this window nothing.
-        watch = Task {
-            while NSEvent.pressedMouseButtons & 1 != 0, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
-            if !Task.isCancelled { dismiss() }
-        }
     }
 
     /// The strip and the room under it, wide enough for the pill under either end.
@@ -71,9 +78,8 @@ final class DropZone: NSPanel {
         return NSRect(x: r.midX - w / 2, y: r.minY - Self.reach, width: w, height: r.height + Self.reach)
     }
 
-    func dismiss() {
-        watch?.cancel()
-        watch = nil
+    /// Takes the window down; the press's watch puts it back if the drag comes near again.
+    func hide() {
         aim(nil, at: nil)
         orderOut(nil)
     }
@@ -81,25 +87,22 @@ final class DropZone: NSPanel {
     /// Moves the pill under the face nearest `point`, or hides it.
     fileprivate func aim(at point: NSPoint?) {
         guard let point else { return aim(nil, at: nil) }
-        let count = store.barChats.count
+        let count = strip.bar.count
         let nearest = (0..<count).min { abs(strip.anchor(under: $0).x - point.x) < abs(strip.anchor(under: $1).x - point.x) }
         aim(nearest, at: point)
     }
 
     private func aim(_ new: Int?, at point: NSPoint?) {
-        let bar = store.barChats
+        let bar = strip.bar
         if let new, new < bar.count {
-            let anchor = strip.anchor(under: new), size = Self.pillSize
-            let screen = (screen ?? NSScreen.main)?.visibleFrame ?? .infinite
-            let x = min(max(anchor.x - size.width / 2, screen.minX + 8), screen.maxX - size.width - 8)
-            let local = NSRect(origin: convertFromScreen(NSRect(x: x, y: anchor.y - size.height, width: 0, height: 0)).origin, size: size)
+            let local = convertFromScreen(strip.frame(under: new, size: Self.pillSize))
             label.rootView = DropPill(name: store.shortName(bar[new]), pointer: point.map { convertFromScreen(NSRect(origin: $0, size: .zero)).origin }
                 .map { NSPoint(x: $0.x - local.minX, y: local.maxY - $0.y) })  // pill coordinates, y down
             if new != slot {
                 let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = slot == nil || reduce ? 0 : 0.2
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+                    ctx.timingFunction = .strongEaseOut
                     pill.animator().frame = local
                 }
                 if slot == nil {
@@ -115,14 +118,37 @@ final class DropZone: NSPanel {
                 pill.animator().alphaValue = 0
             }
         }
-        let changed = new != slot
         slot = new
-        if changed { onTarget(new) }
+        strip.dropTarget = new  // spreads the strip and rings the face
     }
 
-    fileprivate func drop(_ urls: [URL]) -> Bool {
-        guard let slot, !urls.isEmpty else { return false }
-        onDrop(slot, urls)
+    /// Files as they are, files another app writes on drop (into a fresh folder), or a picture saved as a PNG. The
+    /// chat is fixed at the drop: written files can take a while, and the bar may reorder meanwhile.
+    fileprivate func drop(_ drag: NSPasteboard) -> Bool {
+        guard let chat = strip.chat(in: slot) else { return false }
+        if let urls = drag.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            onDrop(chat, urls)
+            return true
+        }
+        if let promises = drag.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
+           !promises.isEmpty {
+            let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil else { return false }
+            var urls: [URL] = [], left = promises.count
+            for promise in promises {
+                promise.receivePromisedFiles(atDestination: dir, operationQueue: .main) { [weak self] url, error in
+                    MainActor.assumeIsolated {
+                        if error == nil { urls.append(url) }
+                        left -= 1
+                        if left == 0, !urls.isEmpty { self?.onDrop(chat, urls) }
+                    }
+                }
+            }
+            return true
+        }
+        guard let picture = Clipboard.picture(from: drag) else { return false }
+        onDrop(chat, [picture])
         return true
     }
 
@@ -136,14 +162,16 @@ final class DropZone: NSPanel {
             return .copy
         }
 
-        override func draggingExited(_ sender: NSDraggingInfo?) { zone?.dismiss() }
+        override func draggingExited(_ sender: NSDraggingInfo?) { zone?.hide() }
 
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                                             options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-            let dropped = zone?.drop(urls) ?? false
-            DispatchQueue.main.async { [zone] in zone?.dismiss() }  // after the drag session hears back
+            let dropped = zone?.drop(sender.draggingPasteboard) ?? false
+            DispatchQueue.main.async { [zone] in zone?.hide() }  // after the drag session hears back
             return dropped
+        }
+
+        override func draggingEnded(_ sender: NSDraggingInfo) {
+            DispatchQueue.main.async { [zone] in zone?.hide() }
         }
     }
 }

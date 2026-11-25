@@ -22,11 +22,12 @@ import Contacts
     func name(_ handle: String) -> String { entries[Self.key(handle)]?.name ?? handle }
     func shortName(_ handle: String) -> String { entries[Self.key(handle)]?.shortName ?? handle }
 
-    /// `nil` handle means the user themselves.
-    func photo(_ handle: String?) -> NSImage? {
-        let key = handle.map(Self.key) ?? "me"
+    func photo(_ handle: String) -> NSImage? { image(Self.key(handle), entries[Self.key(handle)]) }
+    var myPhoto: NSImage? { image("me", me) }
+
+    private func image(_ key: String, _ entry: Entry?) -> NSImage? {
         if let cached = photos[key] { return cached }
-        guard let data = (handle == nil ? me : entries[key])?.photo, let image = NSImage(data: data) else { return nil }
+        guard let data = entry?.photo, let image = NSImage(data: data) else { return nil }
         photos[key] = image
         return image
     }
