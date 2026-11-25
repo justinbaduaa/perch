@@ -30,7 +30,7 @@ enum Access: CaseIterable, Identifiable {
         case .accessibility: "Reactions, replies and chat actions"
         case .notifications: "Remind me"
         case .microphone: "Voice notes"
-        case .screen: "Record your screen"
+        case .screen: "Screenshots and recordings"
         }
     }
 

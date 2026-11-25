@@ -125,7 +125,7 @@ import Testing
 }
 
 /// Only a video in a capture folder made after recording started counts; old captures and screenshots don't.
-@Test func picksUpOnlyTheNewCleanShotVideo() throws {
+@Test func picksUpOnlyANewCleanShotCapture() throws {
     let media = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: media) }
     func capture(_ folder: String, _ file: String) throws -> URL {
@@ -137,11 +137,10 @@ import Testing
     }
     _ = try capture("media_old", "CleanShot old.mp4")
     let since = Date.now
-    _ = try capture("media_shot", "CleanShot shot.png")
     #expect(Recorder.capture(in: media, since: since) == nil)
-    let video = try capture("media_new", "CleanShot new.mp4")
+    let shot = try capture("media_new", "CleanShot shot.png")  // All-In-One can make a screenshot as well as a video
     let found = Recorder.capture(in: media, since: since)
-    #expect(found?.resolvingSymlinksInPath() == video.resolvingSymlinksInPath(), "found \(String(describing: found)) want \(video)")
+    #expect(found?.resolvingSymlinksInPath() == shot.resolvingSymlinksInPath(), "found \(String(describing: found)) want \(shot)")
 }
 
 /// ⌘V takes copied files, and a bare picture as a PNG, but leaves text to the text field.

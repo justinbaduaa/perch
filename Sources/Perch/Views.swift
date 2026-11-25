@@ -817,7 +817,7 @@ struct Composer: View {
                 } else {
                     Group {
                         tool("waveform", "Record voice") { store.record(.voice, for: chat) }
-                        tool("record.circle", "Record screen") { store.record(.screen, for: chat) }
+                        tool("camera.viewfinder", "Screenshot or record") { store.record(.screen, for: chat) }
                     }
                     .disabled(recorder.kind != nil)  // already recording for another chat
                     tool("paperclip", "Attach", action: attach)

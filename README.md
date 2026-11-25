@@ -12,7 +12,7 @@ The first launch opens Set up Perch, which lists every permission with its own A
 
 - **Full Disk Access** reads `~/Library/Messages/chat.db`. macOS has no prompt for it: Open Settings, then drag Perch from the window into the list.
 - **Contacts** for names and photos, **Messages** (Automation) to send, **Accessibility** for reactions, replies and chat actions, **Notifications** for Remind me, and **Microphone** for voice notes.
-- **Screen Recording** is listed only without CleanShot X, which records for Perch otherwise.
+- **Screen Recording** is listed only without CleanShot X, which captures for Perch otherwise.
 
 Setup opens at every launch until Full Disk Access is on, and until you close it once. Right-click the menu bar for Set Up Perch… to see it again.
 
@@ -36,9 +36,9 @@ GitHub then builds Perch, runs the tests and publishes Perch.dmg as that version
 - With the panel open, hovering another avatar changes the composer to "Switch to …".
 - A message you send shows at once with Sending… under it, and goes out after the ones before it, so they arrive in order. Your last message then says Sent, Delivered, Read or Not Delivered, as in Messages. A failed send puts your text back.
 - Drag a file toward the faces in the menu bar and a pill drops under the nearest one, "Drop to Ashley", following you from face to face. Let go and that chat opens with the file in its message box.
-- Dropped files, pasted files and pictures (⌘V), the paperclip and finished screen recordings wait in the message box with an × each; Send sends them, then your text.
+- Dropped files, pasted files and pictures (⌘V), the paperclip and screen captures wait in the message box with an × each; Send sends them, then your text.
 - The waveform button records a voice note, with a live waveform: Send stops and sends it, × throws it away.
-- The record button records the screen with CleanShot X if it's installed (area, window or display, with pause and restart), picking up the file from CleanShot's media folder when you stop. Without CleanShot it opens macOS's capture toolbar; stop with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The recording then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
+- The capture button opens CleanShot X's All-In-One if it's installed: pick an area, window or display, then take a screenshot, a recording or a GIF, and Perch picks up the file from CleanShot's media folder. Without CleanShot it opens macOS's capture toolbar, for a screenshot or a recording; stop a recording with ⌃⌘⎋, since the menu bar's Stop Sharing cancels without a file. The capture then waits in the composer for Send. QuickTime-format recordings are re-encoded as HEVC to fit iMessage's size limit.
 - Scrolled up in a thread, a blue See more button sits above the message box; click it to scroll back down to the newest message.
 - Click anywhere on a voice note to play or pause it. One plays at a time, and closing the panel stops it.
 - Links show as cards with the page's picture, title and site, read from the preview Messages saved, so Perch fetches nothing itself. Click one to open it.
