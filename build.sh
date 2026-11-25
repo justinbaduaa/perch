@@ -18,8 +18,10 @@ if [ -f "$P12" ]; then
     # A throwaway keychain, so signing never asks for your login keychain. The file is the secret; macOS just
     # won't import a .p12 without a password.
     KEYCHAIN=$(mktemp -d)/perch.keychain-db
-    trap 'security delete-keychain "$KEYCHAIN"' EXIT
+    trap 'security delete-keychain "$KEYCHAIN"' EXIT  # also takes it off the search list
     security create-keychain -p perch "$KEYCHAIN"
+    # macOS 26's codesign won't find an identity in a keychain that isn't on the search list.
+    security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
     security unlock-keychain -p perch "$KEYCHAIN"
     security import "$P12" -k "$KEYCHAIN" -P perch -T /usr/bin/codesign >/dev/null
     security set-key-partition-list -S apple-tool:,apple: -s -k perch "$KEYCHAIN" >/dev/null
