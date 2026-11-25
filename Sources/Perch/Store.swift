@@ -245,7 +245,7 @@ struct Pending: Identifiable {
     func send(_ text: String = "", file: URL? = nil, to chat: Chat, replyingTo original: Message? = nil) async -> Bool {
         let p = Pending(id: nextPendingID, chatID: chat.id, text: text, file: file, replyTo: original?.guid)
         nextPendingID -= 1
-        withAnimation(.smooth) { pending.append(p) }
+        pending.append(p)  // not animated: a scroll asked for while the thread's height animates is dropped, so the send stayed under the message box (its bubble pops in by itself)
         let before = lastSend
         let this = Task {
             _ = await before?.value

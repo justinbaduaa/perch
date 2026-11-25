@@ -165,6 +165,15 @@ struct ConversationView: View {
         var shown: CGFloat { (pull <= replyReach ? pull : replyReach + (pull - replyReach) * 0.25) * way }
     }
 
+    /// A send's bubble scales and fades in by itself: its row is added without animation (see `Store.send`).
+    private struct PopIn: ViewModifier {
+        @State private var shown = false
+        func body(content: Content) -> some View {
+            content.scaleEffect(shown ? 1 : 0.9, anchor: .bottomTrailing).opacity(shown ? 1 : 0)
+                .onAppear { withAnimation(.smooth) { shown = true } }
+        }
+    }
+
     /// How far the newest message sits below what shows, the thread's height, and the message box's over it.
     private struct Fold: Equatable { var below: CGFloat, height: CGFloat, composer: CGFloat }
 
@@ -197,6 +206,7 @@ struct ConversationView: View {
                     ForEach(waiting) { p in
                         MessageRow(store: store, chat: chat, message: p.message, showAvatar: false, quoted: quoted(p.message),
                                    receipt: p.id == waiting.last?.id ? .sending : nil, isPending: true)
+                            .modifier(PopIn())
                             .transition(.scale(scale: 0.9, anchor: .bottomTrailing).combined(with: .opacity))
                     }
                     Color.clear.frame(height: 2).id(Self.end)
@@ -215,8 +225,15 @@ struct ConversationView: View {
                 let resized = new.height != old.height || new.composer != old.composer
                 if new.below <= 1 { pinned = true } else if !resized && new.below > old.below { pinned = false }  // scrolled up
                 // Pinned: stay on the newest message as messages land or the box resizes. Scrolled on the next turn,
-                // since a scroll set from inside this layout callback can be dropped.
-                if pinned && resized { Task { proxy.scrollTo(Self.end, anchor: .bottom) } }
+                // since a scroll set from inside this layout callback can be dropped, and again once an animated
+                // change (a tapback, the reply bar) has settled, since one asked for while the height animates is too.
+                if pinned && resized {
+                    Task {
+                        proxy.scrollTo(Self.end, anchor: .bottom)
+                        try? await Task.sleep(for: .milliseconds(450))
+                        if pinned { proxy.scrollTo(Self.end, anchor: .bottom) }
+                    }
+                }
                 above = !pinned && new.below > 40
             }
             // Opening the panel, or sending, lands on the newest message, as in Messages and Beeper.
