@@ -1,0 +1,35 @@
+# Pushing a tag like v0.3 builds Perch, runs the tests and publishes Perch.dmg as that release. The newest is always
+# at https://github.com/justinbaduaa/perch/releases/latest/download/Perch.dmg
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"  # platform-imessage's LFS files are Node binaries Perch doesn't use
+    steps:
+      - uses: actions/checkout@v7
+      - name: Use the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          swift --version
+      - run: swift test
+      - name: Build
+        env:
+          P12: ${{ secrets.PERCH_P12 }}
+        run: |
+          # Every release must carry the same signature, or each Mac asks for every permission again.
+          export PERCH_P12="$RUNNER_TEMP/perch.p12"
+          echo "$P12" | base64 --decode > "$PERCH_P12"
+          test -s "$PERCH_P12"
+          plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" Info.plist
+          plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" Info.plist
+          ./build.sh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" build/Perch.dmg --title "Perch ${GITHUB_REF_NAME#v}" --generate-notes

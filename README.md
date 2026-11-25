@@ -6,12 +6,9 @@ Requires macOS 26 or later.
 
 ## Install
 
-```sh
-./build.sh          # writes build/Perch.app and build/Perch.dmg
-open build/Perch.dmg
-```
+Download [Perch.dmg](https://github.com/justinbaduaa/perch/releases/latest/download/Perch.dmg), the newest release, and drag Perch to Applications. It isn't notarized, so macOS blocks the first open: click Open Anyway in System Settings > Privacy & Security. `./build.sh` builds the same `build/Perch.app` and `build/Perch.dmg` locally.
 
-Drag Perch to Applications and open it. The first launch opens Set up Perch, which lists every permission with its own Allow button and ticks each one off as macOS grants it, so no feature stops to ask later. Allow All runs every prompt macOS can show there, one after another.
+The first launch opens Set up Perch, which lists every permission with its own Allow button and ticks each one off as macOS grants it, so no feature stops to ask later. Allow All runs every prompt macOS can show there, one after another.
 
 - **Full Disk Access** reads `~/Library/Messages/chat.db`. macOS has no prompt for it: Open Settings, then drag Perch from the window into the list.
 - **Contacts** for names and photos, **Messages** (Automation) to send, **Accessibility** for reactions, replies and chat actions, **Notifications** for Remind me, and **Microphone** for voice notes.
@@ -19,7 +16,15 @@ Drag Perch to Applications and open it. The first launch opens Set up Perch, whi
 
 Setup opens at every launch until Full Disk Access is on, and until you close it once. Right-click the menu bar for Set Up Perch… to see it again.
 
-`build.sh` signs with your first Apple Development identity, so these grants survive rebuilds. The DMG is not notarized: it opens on your Mac, but another Mac's Gatekeeper will block it.
+These grants survive updates because every build is signed with Perch's own certificate, `~/.config/perch/perch.p12`. Without that file `build.sh` signs ad-hoc, and each build asks again.
+
+## Release
+
+```sh
+git tag v0.3 && git push origin v0.3
+```
+
+GitHub then builds Perch, runs the tests and publishes Perch.dmg as that version, and the download link above moves to it. The certificate is the repo secret `PERCH_P12`, the base64 of `perch.p12`. Keep a copy of that file somewhere safe: a release signed with any other certificate makes everyone grant Full Disk Access and the rest again.
 
 ## Interactions
 
