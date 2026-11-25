@@ -145,6 +145,9 @@ struct ConversationView: View {
     @State private var monitor: Any?
     /// Scrolled up past the newest message, so See more shows.
     @State private var above = false
+    /// Following the newest message, as Beeper's timeline does: set on reaching the end, cleared only by scrolling up
+    /// yourself, so new messages and Perch's own scrolls never unpin it.
+    @State private var pinned = true
     /// The id of the marker after the last row: what "the newest message" scrolls to.
     private static let end = "end"
 
@@ -209,20 +212,22 @@ struct ConversationView: View {
                 Fold(below: $0.contentSize.height - ($0.visibleRect.maxY - $0.contentInsets.bottom),
                      height: $0.contentSize.height, composer: $0.contentInsets.bottom)
             } action: { old, new in
-                // At the newest message: stay there as messages land or the box resizes. Scrolled on the next turn,
+                let resized = new.height != old.height || new.composer != old.composer
+                if new.below <= 1 { pinned = true } else if !resized && new.below > old.below { pinned = false }  // scrolled up
+                // Pinned: stay on the newest message as messages land or the box resizes. Scrolled on the next turn,
                 // since a scroll set from inside this layout callback can be dropped.
-                let follow = (new.height != old.height || new.composer != old.composer) && old.below < 40
-                if follow { Task { proxy.scrollTo(Self.end, anchor: .bottom) } }
-                above = !follow && new.below > 40
+                if pinned && resized { Task { proxy.scrollTo(Self.end, anchor: .bottom) } }
+                above = !pinned && new.below > 40
             }
-            // Opening the panel, or sending, lands on the newest message, as in Messages.
-            .onChange(of: store.panelShown) { if store.panelShown { proxy.scrollTo(Self.end, anchor: .bottom) } }
+            // Opening the panel, or sending, lands on the newest message, as in Messages and Beeper.
+            .onChange(of: store.panelShown) { if store.panelShown { pinned = true; proxy.scrollTo(Self.end, anchor: .bottom) } }
             .onChange(of: waiting.count) { old, new in
-                if new > old { withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(Self.end, anchor: .bottom) } }
+                if new > old { pinned = true; proxy.scrollTo(Self.end, anchor: .bottom) }
             }
             .overlay(alignment: .bottom) {
                 ZStack { if above {
                     Button {
+                        pinned = true
                         withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo(Self.end, anchor: .bottom) }
                     } label: {
                         HStack(spacing: 6) { Text("See more"); Image(systemName: "chevron.down") }
