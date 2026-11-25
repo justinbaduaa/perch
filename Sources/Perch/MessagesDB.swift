@@ -247,8 +247,8 @@ actor MessagesDB {
 
 /// What a `?` in a query can stand for.
 nonisolated private protocol Bindable { func bind(_ stmt: OpaquePointer, _ index: Int32) }
-extension Int64: Bindable { func bind(_ stmt: OpaquePointer, _ index: Int32) { sqlite3_bind_int64(stmt, index, self) } }
-extension String: Bindable {
+nonisolated extension Int64: Bindable { func bind(_ stmt: OpaquePointer, _ index: Int32) { sqlite3_bind_int64(stmt, index, self) } }
+nonisolated extension String: Bindable {
     func bind(_ stmt: OpaquePointer, _ index: Int32) {
         sqlite3_bind_text(stmt, index, self, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))  // SQLITE_TRANSIENT: sqlite copies it
     }

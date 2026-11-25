@@ -1055,10 +1055,11 @@ struct Avatar: View {
     }
 
     /// Where each member's face sits in the cluster, as fractions of the avatar: centre x, centre y, diameter.
+    /// Measured off Messages: a big face top-left, a medium one right, a small one below, a tiny one top-right.
     private static let clusters: [[(x: CGFloat, y: CGFloat, d: CGFloat)]] = [
-        [(0.36, 0.36, 0.56), (0.66, 0.66, 0.52)],
-        [(0.5, 0.29, 0.46), (0.29, 0.68, 0.44), (0.71, 0.68, 0.44)],
-        [(0.40, 0.33, 0.46), (0.78, 0.27, 0.26), (0.73, 0.63, 0.40), (0.38, 0.75, 0.38)],
+        [(0.36, 0.36, 0.47), (0.70, 0.66, 0.40)],
+        [(0.36, 0.36, 0.47), (0.745, 0.58, 0.36), (0.43, 0.765, 0.29)],
+        [(0.36, 0.36, 0.47), (0.745, 0.58, 0.36), (0.43, 0.765, 0.29), (0.73, 0.26, 0.22)],
     ]
 
     var body: some View {
