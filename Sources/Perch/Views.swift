@@ -161,8 +161,8 @@ struct ConversationView: View {
         var shown: CGFloat { (pull <= replyReach ? pull : replyReach + (pull - replyReach) * 0.25) * way }
     }
 
-    /// How far the newest message sits below what shows, and the height of the message box over the thread.
-    private struct Fold: Equatable { var below: CGFloat, composer: CGFloat }
+    /// How far the newest message sits below what shows, the thread's height, and the message box's over it.
+    private struct Fold: Equatable { var below: CGFloat, height: CGFloat, composer: CGFloat }
 
     /// Where each message row sits in the panel. A plain object, so scrolling doesn't re-render the thread.
     private final class RowFrames { var byGuid: [String: CGRect] = [:] }
@@ -199,14 +199,17 @@ struct ConversationView: View {
                 .padding(.bottom, 8)
             }
             .defaultScrollAnchor(.bottom)
-            .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            // Rows only ever add at the end, so a fixed top anchor keeps what you're reading still; at the newest
+            // message, the fold below follows them down. Changing the anchor live made SwiftUI jump to the bottom.
+            .defaultScrollAnchor(.top, for: .sizeChanges)
             .scrollIndicators(.never)
             .scrollPosition($position)
             .onScrollGeometryChange(for: Fold.self) {
-                Fold(below: $0.contentSize.height - ($0.visibleRect.maxY - $0.contentInsets.bottom), composer: $0.contentInsets.bottom)
+                Fold(below: $0.contentSize.height - ($0.visibleRect.maxY - $0.contentInsets.bottom),
+                     height: $0.contentSize.height, composer: $0.contentInsets.bottom)
             } action: { old, new in
-                if new.composer != old.composer && old.below < 40 {
-                    position.scrollTo(edge: .bottom)  // the message box grew or shrank: the newest message stays above it
+                if (new.height != old.height || new.composer != old.composer) && old.below < 40 {
+                    position.scrollTo(edge: .bottom)  // at the newest message: stay there as messages land or the box resizes
                 } else {
                     above = new.below > 40
                 }

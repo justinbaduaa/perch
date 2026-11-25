@@ -86,6 +86,8 @@ import Testing
     #expect(rows[2].attachments.map(\.url.path) == [photo.path])
     #expect(rows.map(\.replyTo) == [nil, nil, "A"])
     #expect(rows.map(\.receipt) == [nil, .read(Date(timeIntervalSinceReferenceDate: 9)), nil])  // only mine have one
+    // From a message on, the thread starts there, so later loads add to the end instead of sliding.
+    #expect(try await messages.messages(chat: 1, from: 2).map(\.text) == ["from attributedBody", ""])
 
     let link = try #require(try await messages.messages(chat: 2).first?.link)
     #expect(link.title == "Cobalt" && link.site == "American Express")

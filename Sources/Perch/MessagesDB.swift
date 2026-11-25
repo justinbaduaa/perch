@@ -148,8 +148,10 @@ actor MessagesDB {
         return out
     }
 
-    /// The last `threadLength` rows of a chat, oldest first, with tapbacks folded onto their targets.
-    func messages(chat: Int64) throws -> [Message] {
+    /// A chat's rows, oldest first, with tapbacks folded onto their targets: its last `threadLength`, or with `from` (a
+    /// message's ROWID) every row since that one, so new messages add to the end and none drop off the top. Bounded at
+    /// 1000 in case that message is gone.
+    func messages(chat: Int64, from: Int64? = nil) throws -> [Message] {
         var rows: [Message] = []
         var tapbacks: [(target: String, sender: String, type: Int64, emoji: String?)] = []
         var linkImages: [Int64: Int] = [:]  // message ROWID to which of its preview files is the picture
@@ -162,8 +164,10 @@ actor MessagesDB {
             JOIN message m ON m.ROWID = cmj.message_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
             WHERE cmj.chat_id = ? AND m.item_type = 0
+              AND cmj.message_date >= COALESCE(
+                (SELECT message_date FROM chat_message_join WHERE chat_id = ? AND message_id = ?), 0)
             ORDER BY cmj.message_date DESC LIMIT ?
-            """, chat, Self.threadLength) { r in
+            """, chat, chat, from ?? -1, from == nil ? Self.threadLength : 1000) { r in
             let fromMe = r.int(3) != 0
             if r.int(7) == 0 {
                 let raw = r.text(5).flatMap { $0.isEmpty ? nil : $0 } ?? r.data(6).flatMap(decodeAttributedBody) ?? ""

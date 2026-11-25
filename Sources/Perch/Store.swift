@@ -71,6 +71,9 @@ struct Pending: Identifiable {
     @ObservationIgnored private var lastMark: Int64?
     /// The mark each thread was loaded at.
     @ObservationIgnored private var loadedAt: [Int64: Int64] = [:]
+    /// The open chat and the oldest message its thread loaded with. Later loads start there, so a new message adds to
+    /// the end instead of pushing the oldest off the top, which moved whatever was being read.
+    @ObservationIgnored private var threadStart: (chat: Int64, message: Int64)?
     /// Group pictures as avatar-sized thumbnails; nil for one that won't load.
     @ObservationIgnored private var groupPhotos: [URL: NSImage?] = [:]
     @ObservationIgnored private var nextPendingID: Int64 = -1
@@ -367,7 +370,9 @@ struct Pending: Identifiable {
             }
             refreshMuted()  // Hide Alerts lives in Messages' settings, which chat.db doesn't mark
             if let id = panelChat?.id, loadedAt[id] != mark {
-                let thread = try await db.messages(chat: id)
+                let from = threadStart?.chat == id ? threadStart?.message : nil
+                let thread = try await db.messages(chat: id, from: from)
+                if from == nil, let oldest = thread.first { threadStart = (id, oldest.id) }
                 loadedAt[id] = mark
                 if threads[id] != thread { threads[id] = thread }
                 if pending.contains(where: { $0.chatID == id && $0.landed(in: thread) }) {
