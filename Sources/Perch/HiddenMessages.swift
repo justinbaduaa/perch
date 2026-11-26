@@ -26,12 +26,14 @@ nonisolated enum HiddenMessages {
 
     struct Failure: LocalizedError { let errorDescription: String? }
 
-    /// Built once, on first use: platform-imessage allows one per process. `bootstrap` registers its defaults, as Beeper
-    /// does: window coordination keeps Messages' window on a hidden Space while it works (without it the window popped up
-    /// on every reaction), plus misfire prevention. Its secondary-instance mode, a second hidden Messages, failed and
-    /// cost 360 MB.
+    /// Built once, on first use: platform-imessage allows one per process. `bootstrap` registers Beeper's defaults; without
+    /// them Messages' window popped up on every reaction. Window coordination (parking that window on a hidden Space) is
+    /// turned off for this process only: in a stress run against a self-chat it timed out the first action after launch
+    /// and broke misfire prevention, while without it 36 of 36 sends, tapbacks and replies landed and no Messages window
+    /// showed. Its secondary-instance mode, a second hidden Messages, failed and cost 360 MB.
     nonisolated(unsafe) private static let api = Result { () throws -> PlatformAPI in
         IMessageHost.bootstrap()
+        UserDefaults(suiteName: "com.automattic.beeper.desktop.swift-server")?.register(defaults: ["BEEPWindowCoordination": false])  // registration domain: Beeper Desktop's saved settings are untouched
         return try PlatformAPI(accountID: "perch")
     }
 

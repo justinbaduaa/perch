@@ -46,7 +46,7 @@ GitHub then builds Perch, runs the tests and publishes Perch.dmg as that version
 - Four or more photos in one message sit in a stack under their count, as in Messages; click the count to open them out into a grid. Clicking a photo zooms it into Quick Look; the arrow keys step through the chat's media. Drag a photo out to copy the file.
 - Double-click a message to react: ❤️ 👍 👎 😂 ‼️ ❓, then your five most recent emoji (the same row as Messages) and a smiley for any other. Your current one takes it off. Custom emoji go out in the default skin tone. Right-click for the same reactions, Reply, Copy, Share, Show in Finder, Forward to and Remind me. A reminder shows under its message until it fires.
 - Swipe their message right or yours left with two fingers, past the arrow, to reply in its thread. The message shows above the text field; × or Esc cancels. Replies show the message they answer above them.
-- Reactions, replies, read state, Hide Alerts and Delete go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives Messages through Accessibility with its window parked on a hidden Space, so it never pops up.
+- Reactions, replies, read state, Hide Alerts and Delete go through [Beeper's platform-imessage](https://github.com/beeper/platform-imessage), which drives Messages through Accessibility without bringing its window up.
 - Right-click the menu bar item to quit.
 - The expand button, and Open in Messages, open the thread in Messages, group chats included. Reduce Motion skips the grow and spread animations.
 
