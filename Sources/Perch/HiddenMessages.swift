@@ -30,10 +30,11 @@ nonisolated enum HiddenMessages {
     /// them Messages' window popped up on every reaction. Window coordination (parking that window on a hidden Space) is
     /// turned off for this process only: in a stress run against a self-chat it timed out the first action after launch
     /// and broke misfire prevention, while without it 36 of 36 sends, tapbacks and replies landed and no Messages window
-    /// showed. Its secondary-instance mode, a second hidden Messages, failed and cost 360 MB.
+    /// showed. Dock suppression goes too: a park that timed out left Messages with no Dock icon and its window on the
+    /// hidden Space, so it couldn't be opened. Its secondary-instance mode, a second hidden Messages, failed and cost 360 MB.
     nonisolated(unsafe) private static let api = Result { () throws -> PlatformAPI in
         IMessageHost.bootstrap()
-        UserDefaults(suiteName: "com.automattic.beeper.desktop.swift-server")?.register(defaults: ["BEEPWindowCoordination": false])  // registration domain: Beeper Desktop's saved settings are untouched
+        UserDefaults(suiteName: "com.automattic.beeper.desktop.swift-server")?.register(defaults: ["BEEPWindowCoordination": false, "BEEPDockSuppression": false])  // registration domain: Beeper Desktop's saved settings are untouched
         return try PlatformAPI(accountID: "perch")
     }
 
