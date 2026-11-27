@@ -145,15 +145,35 @@ import CoreGraphics
     /// first new screenshot, video or GIF there once it stops growing, which is when CleanShot has finished writing it.
     private func waitForCleanShot(since: Date, take: URL) async {
         let media = URL.homeDirectory.appending(path: "Library/Application Support/CleanShot/media")
-        var lastSize = -1
+        var lastSize = -1, saw = false, quiet = 0, ticks = 0
         while self.take == take {
             if let capture = Self.capture(in: media, since: since) {
                 let size = (try? capture.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > 0, size == lastSize { return await finish(capture, take: take) }
                 lastSize = size
+            } else {
+                let up = Self.cleanShotOnScreen()  // CleanShot says nothing on Esc: a take with no file is over once its windows are
+                saw = saw || up
+                quiet = up ? 0 : quiet + 1
+                if Self.cancelled(sawCleanShot: saw, quiet: quiet, ticks: ticks) { return await finish(nil, take: take) }
             }
+            ticks += 1
             try? await Task.sleep(for: .milliseconds(500))
         }
+    }
+
+    /// Whether a CleanShot take ended with no file, counted in half-second ticks: its windows came and have been gone
+    /// for three, or never came in twenty.
+    /// shortcut: a recording with CleanShot's border and controls turned off counts as cancelled; watch its recording state if that setting turns up.
+    static func cancelled(sawCleanShot: Bool, quiet: Int, ticks: Int) -> Bool {
+        sawCleanShot ? quiet >= 3 : ticks >= 20
+    }
+
+    /// Any CleanShot window on screen: its capture overlay, recording controls or Quick Access thumbnail. It shows none
+    /// while idle.
+    private static func cleanShotOnScreen() -> Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { ($0[kCGWindowOwnerName as String] as? String)?.hasPrefix("CleanShot") == true }
     }
 
     static func capture(in media: URL, since: Date) -> URL? {

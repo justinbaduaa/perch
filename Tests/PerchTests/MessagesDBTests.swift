@@ -146,6 +146,14 @@ import Testing
 }
 
 /// ⌘V takes copied files, and a bare picture as a PNG, but leaves text to the text field.
+/// A cancelled CleanShot take leaves no file, only its windows going away.
+@Test func cleanShotTakeEndsWhenItsWindowsGo() {
+    #expect(!Recorder.cancelled(sawCleanShot: true, quiet: 2, ticks: 50))  // gone a moment: a file may still land
+    #expect(Recorder.cancelled(sawCleanShot: true, quiet: 3, ticks: 50))
+    #expect(!Recorder.cancelled(sawCleanShot: false, quiet: 19, ticks: 19))  // still opening
+    #expect(Recorder.cancelled(sawCleanShot: false, quiet: 20, ticks: 20))
+}
+
 @Test func pastesFilesAndPicturesButNotText() throws {
     let pb = NSPasteboard(name: .init("perch-test-\(UUID().uuidString)"))
     defer { pb.releaseGlobally() }
